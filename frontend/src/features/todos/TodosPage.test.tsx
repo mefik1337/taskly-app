@@ -1,255 +1,250 @@
-import { act, render, screen, waitFor } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
-import { beforeEach, expect, it, vi } from 'vitest'
-import { SuccessNotice } from '../../components/SuccessNotice'
-import { useNotice } from '../../hooks/useNotice'
+import { fireEvent, screen, waitFor, within } from '@testing-library/react'
+import { expect, it } from 'vitest'
+import { installFakeApi } from '../../test/fakeApi'
+import { renderWithProviders } from '../../test/queryWrapper'
 import { todoFixture } from '../../test/todoFixture'
-import { DeleteTodoDialog } from './components/DeleteTodoDialog'
-import { TodoEditor } from './components/TodoEditor'
-import { TodoFilters } from './components/TodoFilters'
-import { TodoList } from './components/TodoList'
-import { TodosHeader } from './components/TodosHeader'
-import { useTodoFilters } from './hooks/useTodoFilters'
-import { useTodosBusy } from './hooks/useTodosBusy'
-import { useTodosQuery } from './hooks/useTodosQuery'
-import { useUpdateTodoMutation } from './hooks/useUpdateTodoMutation'
+import { todosApi } from './api/todos'
+import type { Todo } from './types'
 import { TodosPage } from './TodosPage'
 
-vi.mock('../../design-system', () => import('../../design-system/mocks'))
-vi.mock('../../hooks/useNotice', () => ({ useNotice: vi.fn() }))
-vi.mock('./hooks/useTodoFilters', () => ({ useTodoFilters: vi.fn() }))
-vi.mock('./hooks/useTodosBusy', () => ({ useTodosBusy: vi.fn() }))
-vi.mock('./hooks/useTodosQuery', () => ({ useTodosQuery: vi.fn() }))
-vi.mock('./hooks/useUpdateTodoMutation', () => ({
-  useUpdateTodoMutation: vi.fn(),
-}))
-vi.mock('./components/TodosHeader', () => ({
-  TodosHeader: vi.fn(() => <h1>Tasks</h1>),
-}))
-vi.mock('./components/TodoFilters', () => ({ TodoFilters: vi.fn(() => null) }))
-vi.mock('./components/TodoList', () => ({
-  TodoList: vi.fn(() => <p>Task list</p>),
-}))
-vi.mock('./components/TodoEditor', () => ({
-  TodoEditor: vi.fn(() => <p>Editor open</p>),
-}))
-vi.mock('./components/DeleteTodoDialog', () => ({
-  DeleteTodoDialog: vi.fn(() => <p>Delete dialog open</p>),
-}))
-vi.mock('../../components/SuccessNotice', () => ({
-  SuccessNotice: vi.fn(() => null),
-}))
-
-beforeEach(() => vi.clearAllMocks())
-
-const filterState = {
-  filter: 'all' as const,
-  search: '',
-  sort: 'newest' as const,
-  visible: [todoFixture],
-  setFilter: vi.fn(),
-  setSearch: vi.fn(),
-  setSort: vi.fn(),
+const groceries: Todo = {
+  ...todoFixture,
+  id: 8,
+  title: 'Buy groceries',
+  completed: true,
+  created_at: '2026-10-05T12:00:00Z',
 }
 
-function setup({
-  query = {},
-  mutation = {},
-  busy = false,
-  message = '',
-}: {
-  query?: Record<string, unknown>
-  mutation?: Record<string, unknown>
-  busy?: boolean
-  message?: string
-} = {}) {
-  const notify = vi.fn()
-  const mutateAsync = vi.fn()
-  const reset = vi.fn()
-  const refetch = vi.fn().mockResolvedValue(undefined)
-  vi.mocked(useTodosQuery).mockReturnValue({
-    data: [todoFixture],
-    isPending: false,
-    isFetching: false,
-    isError: false,
-    error: null,
-    refetch,
-    ...query,
-  } as unknown as ReturnType<typeof useTodosQuery>)
-  vi.mocked(useUpdateTodoMutation).mockReturnValue({
-    error: null,
-    reset,
-    mutateAsync,
-    ...mutation,
-  } as unknown as ReturnType<typeof useUpdateTodoMutation>)
-  vi.mocked(useTodosBusy).mockReturnValue(busy)
-  vi.mocked(useNotice).mockReturnValue({ message, notify })
-  vi.mocked(useTodoFilters).mockReturnValue(filterState)
-  render(<TodosPage />)
-  return { notify, mutateAsync, reset, refetch }
+function renderPage() {
+  return renderWithProviders(<TodosPage />)
 }
 
-function lastListProps() {
-  return vi.mocked(TodoList).mock.lastCall![0]
+function taskTitles() {
+  return within(screen.getByRole('region', { name: 'Task list' }))
+    .getAllByRole('heading', { level: 3 })
+    .map((heading) => heading.textContent)
 }
 
-it('displays a query failure and resets mutation errors before retrying', async () => {
-  const user = userEvent.setup()
-  const { refetch, reset } = setup({
-    query: {
-      data: [],
-      isError: true,
-      error: new Error('The server is unavailable.'),
-    },
-  })
-  expect(screen.getByTestId('alert')).toHaveTextContent(
-    'The server is unavailable.',
+it('shows loading feedback until the tasks arrive', async () => {
+  const api = installFakeApi([todoFixture])
+  const release = api.delayNextResponse('GET')
+  renderPage()
+  expect(await screen.findByRole('status')).toHaveTextContent(
+    'Loading your tasks…',
   )
-  await user.click(screen.getByRole('button', { name: 'Try again' }))
-  await waitFor(() => expect(refetch).toHaveBeenCalledTimes(1))
-  expect(reset).toHaveBeenCalledTimes(1)
-  expect(reset.mock.invocationCallOrder[0]).toBeLessThan(
-    refetch.mock.invocationCallOrder[0],
+  expect(screen.getByRole('button', { name: 'New task' })).toBeDisabled()
+  release()
+  expect(
+    await screen.findByRole('heading', { name: 'Prepare a demo' }),
+  ).toBeVisible()
+  expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'New task' })).toBeEnabled()
+})
+
+it('lists the tasks from the server newest first', async () => {
+  installFakeApi([todoFixture, groceries])
+  renderPage()
+  await screen.findByRole('heading', { name: 'Prepare a demo' })
+  expect(taskTitles()).toEqual(['Buy groceries', 'Prepare a demo'])
+})
+
+it('narrows the list by search text and status', async () => {
+  installFakeApi([todoFixture, groceries])
+  const { user } = renderPage()
+  await screen.findByRole('heading', { name: 'Prepare a demo' })
+  await user.type(screen.getByLabelText('Search tasks'), 'demo')
+  expect(taskTitles()).toEqual(['Prepare a demo'])
+  await user.selectOptions(screen.getByLabelText('Status'), 'Completed')
+  expect(
+    screen.getByRole('heading', { name: 'No matching tasks' }),
+  ).toBeVisible()
+})
+
+it('completes a task and shows the success notice', async () => {
+  installFakeApi([todoFixture])
+  const { user } = renderPage()
+  await user.click(
+    await screen.findByRole('checkbox', { name: 'Complete: Prepare a demo' }),
   )
+  expect(await screen.findByRole('status')).toHaveTextContent(
+    'Another task complete. Well done!',
+  )
+  expect(
+    screen.getByRole('checkbox', { name: 'Mark as active: Prepare a demo' }),
+  ).toBeChecked()
 })
 
-it('prefers the toggle error over the query error in the alert', () => {
-  setup({
-    query: { error: new Error('Query failed') },
-    mutation: { error: new Error('Toggle failed') },
-  })
-  expect(screen.getByTestId('alert')).toHaveTextContent('Toggle failed')
-  expect(screen.queryByText('Query failed')).not.toBeInTheDocument()
-})
-
-it('shows no alert when nothing failed', () => {
-  setup()
-  expect(screen.queryByTestId('alert')).not.toBeInTheDocument()
-})
-
-it.each([
-  ['refetching', { isFetching: true }, false],
-  ['busy', {}, true],
-])('disables retrying while %s', (_, query, busy) => {
-  setup({ query: { ...query, error: new Error('Failed') }, busy })
-  expect(screen.getByRole('button', { name: 'Try again' })).toBeDisabled()
-})
-
-it('passes filter state, visible tasks and status flags to its children', () => {
-  setup({ query: { isPending: true, isError: true } })
-  expect(vi.mocked(TodoFilters).mock.lastCall![0]).toEqual({
-    filter: 'all',
-    search: '',
-    sort: 'newest',
-    onFilterChange: filterState.setFilter,
-    onSearchChange: filterState.setSearch,
-    onSortChange: filterState.setSort,
-  })
-  expect(lastListProps()).toEqual(
-    expect.objectContaining({
-      todos: [todoFixture],
-      hasTodos: true,
-      loading: true,
-      failed: true,
-      busy: false,
+it('marks a completed task active again and says so', async () => {
+  installFakeApi([groceries])
+  const { user } = renderPage()
+  await user.click(
+    await screen.findByRole('checkbox', {
+      name: 'Mark as active: Buy groceries',
     }),
   )
-  expect(useTodoFilters).toHaveBeenCalledWith([todoFixture])
+  expect(await screen.findByRole('status')).toHaveTextContent(
+    'Task marked as active.',
+  )
+  expect(
+    screen.getByRole('checkbox', { name: 'Complete: Buy groceries' }),
+  ).not.toBeChecked()
 })
 
-it('treats missing query data as an empty task list', () => {
-  setup({ query: { data: undefined } })
-  expect(useTodoFilters).toHaveBeenCalledWith([])
-  expect(lastListProps().hasTodos).toBe(false)
+it('disables task actions while a task is being saved', async () => {
+  const api = installFakeApi([todoFixture])
+  const release = api.delayNextResponse('PATCH')
+  const { user } = renderPage()
+  await user.click(
+    await screen.findByRole('checkbox', { name: 'Complete: Prepare a demo' }),
+  )
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'New task' })).toBeDisabled(),
+  )
+  expect(
+    screen.getByRole('button', { name: 'Edit: Prepare a demo' }),
+  ).toBeDisabled()
+  expect(screen.getByRole('checkbox')).toBeDisabled()
+  release()
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'New task' })).toBeEnabled(),
+  )
 })
 
-it.each([
-  ['loading', { isPending: true }, false, true],
-  ['busy', {}, true, true],
-  ['idle', {}, false, false],
-])('sets the header disabled state while %s', (_, query, busy, disabled) => {
-  setup({ query, busy })
-  expect(vi.mocked(TodosHeader).mock.lastCall![0].disabled).toBe(disabled)
+it('shows the server error and reloads the list on Try again', async () => {
+  const api = installFakeApi([todoFixture])
+  api.failNext('GET', 503, 'The server is unavailable.')
+  const { user } = renderPage()
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    'The server is unavailable.',
+  )
+  expect(
+    screen.getByRole('heading', {
+      name: 'The task list is temporarily unavailable',
+    }),
+  ).toBeVisible()
+  await user.click(screen.getByRole('button', { name: 'Try again' }))
+  expect(
+    await screen.findByRole('heading', { name: 'Prepare a demo' }),
+  ).toBeVisible()
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument()
 })
 
-it('forwards the current notice message', () => {
-  setup({ message: 'Task deleted.' })
-  expect(vi.mocked(SuccessNotice).mock.lastCall![0]).toEqual({
-    message: 'Task deleted.',
+it('keeps the tasks and disables Try again while a refresh on window focus failed and reloads', async () => {
+  const api = installFakeApi([todoFixture])
+  const { user } = renderPage()
+  await screen.findByRole('heading', { name: 'Prepare a demo' })
+  api.failNext('GET', 503, 'The server is unavailable.')
+  fireEvent(window, new Event('visibilitychange'))
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    'The server is unavailable.',
+  )
+  expect(screen.getByRole('heading', { name: 'Prepare a demo' })).toBeVisible()
+  const release = api.delayNextResponse('GET')
+  await user.click(screen.getByRole('button', { name: 'Try again' }))
+  expect(screen.getByRole('button', { name: 'Try again' })).toBeDisabled()
+  release()
+  await waitFor(() =>
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument(),
+  )
+})
+
+it('shows a failed toggle of a task deleted elsewhere and Try again reloads the list without it', async () => {
+  installFakeApi([todoFixture])
+  const { user } = renderPage()
+  const checkbox = await screen.findByRole('checkbox', {
+    name: 'Complete: Prepare a demo',
   })
+  await todosApi.remove(7)
+  await user.click(checkbox)
+  expect(await screen.findByRole('alert')).toHaveTextContent('Task not found.')
+  expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: 'Prepare a demo' })).toBeVisible()
+  await user.click(screen.getByRole('button', { name: 'Try again' }))
+  expect(
+    await screen.findByRole('heading', { name: 'Add your first task' }),
+  ).toBeVisible()
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument()
 })
 
-it.each([
-  [false, true, 'Another task complete. Well done!'],
-  [true, false, 'Task marked as active.'],
-])(
-  'toggles a task with completed %s and announces the saved state',
-  async (completed, next, notice) => {
-    const { mutateAsync, notify } = setup()
-    mutateAsync.mockResolvedValue({ ...todoFixture, completed: next })
-    act(() => lastListProps().onToggle({ ...todoFixture, completed }))
-    await waitFor(() => expect(notify).toHaveBeenCalledWith(notice))
-    expect(mutateAsync).toHaveBeenCalledWith({
-      id: todoFixture.id,
-      input: { completed: next },
-    })
-  },
-)
-
-it('does not toggle while busy', () => {
-  const { mutateAsync } = setup({ busy: true })
-  act(() => lastListProps().onToggle(todoFixture))
-  expect(mutateAsync).not.toHaveBeenCalled()
+it('adds a task through the New task dialog', async () => {
+  installFakeApi([todoFixture])
+  const { user } = renderPage()
+  await screen.findByRole('heading', { name: 'Prepare a demo' })
+  await user.click(screen.getByRole('button', { name: 'New task' }))
+  const dialog = screen.getByRole('dialog', { name: 'New task' })
+  await user.type(within(dialog).getByLabelText('Task title *'), 'Buy milk')
+  await user.selectOptions(within(dialog).getByLabelText('Priority'), 'High')
+  await user.click(within(dialog).getByRole('button', { name: 'Save task' }))
+  expect(await screen.findByRole('status')).toHaveTextContent('New task added.')
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  expect(taskTitles()).toEqual(['Buy milk', 'Prepare a demo'])
+  const [added] = within(
+    screen.getByRole('region', { name: 'Task list' }),
+  ).getAllByRole('listitem')
+  expect(within(added).getByText('High')).toBeVisible()
 })
 
-it('does not announce anything when toggling fails', async () => {
-  const { mutateAsync, notify } = setup()
-  mutateAsync.mockRejectedValue(new Error('Cannot save'))
-  act(() => lastListProps().onToggle(todoFixture))
-  await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1))
-  await act(async () => {})
-  expect(notify).not.toHaveBeenCalled()
-})
-
-it('opens the editor for a new task from the header and the list', () => {
-  setup()
-  expect(TodoEditor).not.toHaveBeenCalled()
-  act(() => vi.mocked(TodosHeader).mock.lastCall![0].onCreate())
-  expect(vi.mocked(TodoEditor).mock.lastCall![0]).toEqual(
-    expect.objectContaining({ todo: 'new', busy: false }),
+it('opens the New task dialog from the empty list', async () => {
+  installFakeApi()
+  const { user } = renderPage()
+  await user.click(
+    await screen.findByRole('button', { name: 'Add your first task' }),
   )
-  act(() => vi.mocked(TodoEditor).mock.lastCall![0].onClose())
-  expect(screen.queryByText('Editor open')).not.toBeInTheDocument()
-  act(() => lastListProps().onCreate())
-  expect(screen.getByText('Editor open')).toBeVisible()
-  expect(vi.mocked(TodoEditor).mock.lastCall![0].todo).toBe('new')
+  expect(screen.getByRole('dialog', { name: 'New task' })).toBeVisible()
 })
 
-it('closes the editor and announces the notice after saving an edited task', () => {
-  const { notify } = setup()
-  act(() => lastListProps().onEdit(todoFixture))
-  expect(vi.mocked(TodoEditor).mock.lastCall![0].todo).toBe(todoFixture)
-  act(() => vi.mocked(TodoEditor).mock.lastCall![0].onSaved('Changes saved.'))
-  expect(screen.queryByText('Editor open')).not.toBeInTheDocument()
-  expect(notify).toHaveBeenCalledWith('Changes saved.')
+it('closes the editor without saving on Cancel', async () => {
+  const api = installFakeApi([todoFixture])
+  const { user } = renderPage()
+  await screen.findByRole('heading', { name: 'Prepare a demo' })
+  await user.click(screen.getByRole('button', { name: 'New task' }))
+  await user.click(screen.getByRole('button', { name: 'Cancel' }))
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  expect(api.requestsTo('POST')).toEqual([])
 })
 
-it('opens the delete dialog for a task and closes it without a notice', () => {
-  const { notify } = setup({ busy: true })
-  expect(DeleteTodoDialog).not.toHaveBeenCalled()
-  act(() => lastListProps().onDelete(todoFixture))
-  expect(vi.mocked(DeleteTodoDialog).mock.lastCall![0]).toEqual(
-    expect.objectContaining({ todo: todoFixture, busy: true }),
+it('edits a task and shows the saved changes', async () => {
+  installFakeApi([todoFixture])
+  const { user } = renderPage()
+  await user.click(
+    await screen.findByRole('button', { name: 'Edit: Prepare a demo' }),
   )
-  act(() => vi.mocked(DeleteTodoDialog).mock.lastCall![0].onClose())
-  expect(screen.queryByText('Delete dialog open')).not.toBeInTheDocument()
-  expect(notify).not.toHaveBeenCalled()
+  const dialog = screen.getByRole('dialog', { name: 'Edit task' })
+  const title = within(dialog).getByLabelText('Task title *')
+  await user.clear(title)
+  await user.type(title, 'Prepare the keynote')
+  await user.click(within(dialog).getByRole('button', { name: 'Save task' }))
+  expect(await screen.findByRole('status')).toHaveTextContent('Changes saved.')
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  expect(taskTitles()).toEqual(['Prepare the keynote'])
 })
 
-it('closes the delete dialog and announces the deletion', () => {
-  const { notify } = setup()
-  act(() => lastListProps().onDelete(todoFixture))
-  act(() => vi.mocked(DeleteTodoDialog).mock.lastCall![0].onDeleted())
-  expect(screen.queryByText('Delete dialog open')).not.toBeInTheDocument()
-  expect(notify).toHaveBeenCalledWith('Task deleted.')
+it('deletes a task after confirmation', async () => {
+  installFakeApi([todoFixture])
+  const { user } = renderPage()
+  await user.click(
+    await screen.findByRole('button', { name: 'Delete: Prepare a demo' }),
+  )
+  await user.click(screen.getByRole('button', { name: 'Delete task' }))
+  expect(await screen.findByRole('status')).toHaveTextContent('Task deleted.')
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  expect(
+    screen.queryByRole('heading', { name: 'Prepare a demo' }),
+  ).not.toBeInTheDocument()
+  expect(
+    screen.getByRole('heading', { name: 'Add your first task' }),
+  ).toBeVisible()
+})
+
+it('keeps the task when deletion is cancelled', async () => {
+  const api = installFakeApi([todoFixture])
+  const { user } = renderPage()
+  await user.click(
+    await screen.findByRole('button', { name: 'Delete: Prepare a demo' }),
+  )
+  await user.click(screen.getByRole('button', { name: 'Cancel' }))
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: 'Prepare a demo' })).toBeVisible()
+  expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  expect(api.requestsTo('DELETE')).toEqual([])
 })

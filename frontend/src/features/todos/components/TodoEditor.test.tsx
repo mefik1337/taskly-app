@@ -1,174 +1,101 @@
-import { render, screen, waitFor } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
-import { beforeEach, expect, it, vi } from 'vitest'
+import { screen, waitFor } from '@testing-library/react'
+import { expect, it, vi } from 'vitest'
+import { installFakeApi } from '../../../test/fakeApi'
+import { renderWithProviders } from '../../../test/queryWrapper'
 import { todoFixture } from '../../../test/todoFixture'
-import { useCreateTodoMutation } from '../hooks/useCreateTodoMutation'
-import { useUpdateTodoMutation } from '../hooks/useUpdateTodoMutation'
-import type { TodoInput } from '../types'
+import type { Todo } from '../types'
 import { TodoEditor } from './TodoEditor'
-import { TodoForm } from './TodoForm'
 
-vi.mock('../../../design-system', () => import('../../../design-system/mocks'))
-vi.mock('../hooks/useCreateTodoMutation', () => ({
-  useCreateTodoMutation: vi.fn(),
-}))
-vi.mock('../hooks/useUpdateTodoMutation', () => ({
-  useUpdateTodoMutation: vi.fn(),
-}))
-vi.mock('./TodoForm', () => ({
-  TodoForm: vi.fn(
-    ({ onSubmit }: { onSubmit: (input: TodoInput) => Promise<void> }) => (
-      <button onClick={() => void onSubmit(todoFixture)}>Submit form</button>
-    ),
-  ),
-}))
-beforeEach(() => vi.clearAllMocks())
-
-function mockMutations(
-  create: Partial<{ isPending: boolean; error: Error | null }> = {},
-  update: Partial<{ isPending: boolean; error: Error | null }> = {},
-) {
-  const createAsync = vi.fn().mockResolvedValue(todoFixture)
-  const updateAsync = vi.fn().mockResolvedValue(todoFixture)
-  vi.mocked(useCreateTodoMutation).mockReturnValue({
-    isPending: false,
-    error: null,
-    mutateAsync: createAsync,
-    ...create,
-  } as unknown as ReturnType<typeof useCreateTodoMutation>)
-  vi.mocked(useUpdateTodoMutation).mockReturnValue({
-    isPending: false,
-    error: null,
-    mutateAsync: updateAsync,
-    ...update,
-  } as unknown as ReturnType<typeof useUpdateTodoMutation>)
-  return { createAsync, updateAsync }
-}
-
-function lastFormProps() {
-  return vi.mocked(TodoForm).mock.lastCall![0]
-}
-
-it('creates a new task and reports a successful save', async () => {
-  const user = userEvent.setup()
-  const create = vi.fn().mockResolvedValue(todoFixture)
-  const update = vi.fn()
-  vi.mocked(useCreateTodoMutation).mockReturnValue({
-    isPending: false,
-    error: null,
-    mutateAsync: create,
-  } as unknown as ReturnType<typeof useCreateTodoMutation>)
-  vi.mocked(useUpdateTodoMutation).mockReturnValue({
-    isPending: false,
-    error: null,
-    mutateAsync: update,
-  } as unknown as ReturnType<typeof useUpdateTodoMutation>)
+function renderEditor(todo: Todo | 'new', busy = false) {
+  const onClose = vi.fn()
   const onSaved = vi.fn()
-  render(
-    <TodoEditor todo="new" busy={false} onClose={vi.fn()} onSaved={onSaved} />,
+  const { user } = renderWithProviders(
+    <TodoEditor todo={todo} busy={busy} onClose={onClose} onSaved={onSaved} />,
   )
+  return { user, onClose, onSaved }
+}
+
+it('opens a New task dialog with an empty form', () => {
+  installFakeApi()
+  renderEditor('new')
   expect(screen.getByRole('dialog', { name: 'New task' })).toBeVisible()
-  await user.click(screen.getByRole('button', { name: 'Submit form' }))
+  expect(screen.getByLabelText('Task title *')).toHaveValue('')
+  expect(screen.getByLabelText('Task title *')).toHaveFocus()
+})
+
+it('reports a new task as added after saving it', async () => {
+  installFakeApi()
+  const { user, onSaved } = renderEditor('new')
+  await user.type(screen.getByLabelText('Task title *'), 'Buy milk')
+  await user.click(screen.getByRole('button', { name: 'Save task' }))
   await waitFor(() => expect(onSaved).toHaveBeenCalledWith('New task added.'))
-  expect(create).toHaveBeenCalledWith(todoFixture)
-  expect(update).not.toHaveBeenCalled()
 })
 
-it('passes an empty initial value to the form for a new task', () => {
-  mockMutations()
-  render(
-    <TodoEditor todo="new" busy={false} onClose={vi.fn()} onSaved={vi.fn()} />,
-  )
-  expect(lastFormProps()).toEqual(
-    expect.objectContaining({ initial: undefined, busy: false, error: null }),
-  )
-})
-
-it('updates an existing task by id and reports saved changes', async () => {
-  const user = userEvent.setup()
-  const { createAsync, updateAsync } = mockMutations()
-  const onSaved = vi.fn()
-  const existing = { ...todoFixture, id: 12, title: 'Existing' }
-  render(
-    <TodoEditor
-      todo={existing}
-      busy={false}
-      onClose={vi.fn()}
-      onSaved={onSaved}
-    />,
-  )
+it('opens an Edit task dialog prefilled with the task', () => {
+  installFakeApi([todoFixture])
+  renderEditor({ ...todoFixture, description: 'Slides' })
   expect(screen.getByRole('dialog', { name: 'Edit task' })).toBeVisible()
-  expect(lastFormProps().initial).toBe(existing)
-  await user.click(screen.getByRole('button', { name: 'Submit form' }))
+  expect(screen.getByLabelText('Task title *')).toHaveValue('Prepare a demo')
+  expect(screen.getByLabelText('Description (optional)')).toHaveValue('Slides')
+})
+
+it('reports the changes as saved after editing a task', async () => {
+  installFakeApi([todoFixture])
+  const { user, onSaved } = renderEditor(todoFixture)
+  await user.clear(screen.getByLabelText('Task title *'))
+  await user.type(screen.getByLabelText('Task title *'), 'Prepare the keynote')
+  await user.click(screen.getByRole('button', { name: 'Save task' }))
   await waitFor(() => expect(onSaved).toHaveBeenCalledWith('Changes saved.'))
-  expect(updateAsync).toHaveBeenCalledWith({ id: 12, input: todoFixture })
-  expect(createAsync).not.toHaveBeenCalled()
-})
-
-it('does not report a save when the mutation rejects', async () => {
-  const user = userEvent.setup()
-  const { updateAsync } = mockMutations()
-  updateAsync.mockRejectedValue(new Error('Cannot save'))
-  const onSaved = vi.fn()
-  render(
-    <TodoEditor
-      todo={todoFixture}
-      busy={false}
-      onClose={vi.fn()}
-      onSaved={onSaved}
-    />,
-  )
-  await user.click(screen.getByRole('button', { name: 'Submit form' }))
-  await waitFor(() => expect(updateAsync).toHaveBeenCalledTimes(1))
-  expect(onSaved).not.toHaveBeenCalled()
-})
-
-it('shows the error of the mutation matching the edited task', () => {
-  mockMutations(
-    { error: new Error('Create failed') },
-    { error: new Error('Update failed') },
-  )
-  const { rerender } = render(
-    <TodoEditor
-      todo={todoFixture}
-      busy={false}
-      onClose={vi.fn()}
-      onSaved={vi.fn()}
-    />,
-  )
-  expect(lastFormProps().error).toBe('Update failed')
-  rerender(
-    <TodoEditor todo="new" busy={false} onClose={vi.fn()} onSaved={vi.fn()} />,
-  )
-  expect(lastFormProps().error).toBe('Create failed')
 })
 
 it.each([
-  ['the mutation is pending', true, false],
-  ['other task work is busy', false, true],
-])(
-  'marks the form busy and ignores submissions while %s',
-  async (_, isPending, busy) => {
-    const user = userEvent.setup()
-    const { createAsync } = mockMutations({ isPending })
-    const onSaved = vi.fn()
-    render(
-      <TodoEditor todo="new" busy={busy} onClose={vi.fn()} onSaved={onSaved} />,
-    )
-    expect(lastFormProps().busy).toBe(true)
-    expect(screen.getByRole('button', { name: 'Close' })).toBeDisabled()
-    await user.click(screen.getByRole('button', { name: 'Submit form' }))
-    expect(createAsync).not.toHaveBeenCalled()
+  ['a new task', 'new', 'POST', 'Database unavailable'],
+  ['an edited task', todoFixture, 'PATCH', 'Task not found.'],
+] as const)(
+  'keeps the editor for %s open with the server error when saving fails',
+  async (_, todo, method, detail) => {
+    const api = installFakeApi([todoFixture])
+    api.failNext(method, 500, detail)
+    const { user, onSaved } = renderEditor(todo)
+    await user.type(screen.getByLabelText('Task title *'), 'X')
+    await user.click(screen.getByRole('button', { name: 'Save task' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(detail)
     expect(onSaved).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Save task' })).toBeEnabled()
   },
 )
 
-it('closes through the form cancel callback', () => {
-  mockMutations()
-  const onClose = vi.fn()
-  render(
-    <TodoEditor todo="new" busy={false} onClose={onClose} onSaved={vi.fn()} />,
+it('shows Saving… and blocks closing while the save is pending', async () => {
+  const api = installFakeApi()
+  const release = api.delayNextResponse('POST')
+  const { user, onClose, onSaved } = renderEditor('new')
+  await user.type(screen.getByLabelText('Task title *'), 'Buy milk')
+  await user.click(screen.getByRole('button', { name: 'Save task' }))
+  expect(await screen.findByRole('button', { name: 'Saving…' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Close' })).toBeDisabled()
+  expect(screen.getByRole('dialog', { name: 'New task' })).toHaveAttribute(
+    'aria-busy',
+    'true',
   )
-  lastFormProps().onCancel()
+  await user.keyboard('{Escape}')
+  expect(onClose).not.toHaveBeenCalled()
+  release()
+  await waitFor(() => expect(onSaved).toHaveBeenCalledWith('New task added.'))
+})
+
+it('keeps the form disabled while other task work is busy', () => {
+  installFakeApi()
+  renderEditor('new', true)
+  expect(screen.getByLabelText('Task title *')).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Saving…' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Close' })).toBeDisabled()
+})
+
+it('closes without saving on Cancel', async () => {
+  const api = installFakeApi()
+  const { user, onClose } = renderEditor('new')
+  await user.click(screen.getByRole('button', { name: 'Cancel' }))
   expect(onClose).toHaveBeenCalledTimes(1)
+  expect(api.requests).toEqual([])
 })

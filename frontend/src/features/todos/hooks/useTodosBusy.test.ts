@@ -1,49 +1,63 @@
-import { useMutation } from '@tanstack/react-query'
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { expect, it } from 'vitest'
+import { installFakeApi, type Method } from '../../../test/fakeApi'
 import { createTestQueryClient, queryWrapper } from '../../../test/queryWrapper'
-import { todoKeys } from '../api/queryKeys'
+import { todoFixture } from '../../../test/todoFixture'
+import { useCreateTodoMutation } from './useCreateTodoMutation'
+import { useDeleteTodoMutation } from './useDeleteTodoMutation'
 import { useTodosBusy } from './useTodosBusy'
+import { useTodosQuery } from './useTodosQuery'
+import { useUpdateTodoMutation } from './useUpdateTodoMutation'
 
-function renderWithMutation(mutationKey: readonly string[]) {
-  let resolve: () => void = () => {}
-  const pending = new Promise<void>((done) => {
-    resolve = done
-  })
-  const { result } = renderHook(
+function renderBusy() {
+  return renderHook(
     () => ({
       busy: useTodosBusy(),
-      mutation: useMutation({ mutationKey, mutationFn: () => pending }),
+      create: useCreateTodoMutation(),
+      update: useUpdateTodoMutation(),
+      remove: useDeleteTodoMutation(),
     }),
     { wrapper: queryWrapper(createTestQueryClient()) },
-  )
-  return { result, resolve }
+  ).result
 }
 
-it('is idle when no mutation runs', () => {
-  const { result } = renderWithMutation(todoKeys.create)
-  expect(result.current.busy).toBe(false)
+type Hooks = ReturnType<typeof renderBusy>['current']
+
+it('is idle while no task is being saved', () => {
+  installFakeApi([todoFixture])
+  expect(renderBusy().current.busy).toBe(false)
 })
 
-it.each([
-  { name: 'create', key: todoKeys.create },
-  { name: 'update', key: todoKeys.update },
-  { name: 'delete', key: todoKeys.delete },
+it.each<[string, Method, (hooks: Hooks) => void]>([
+  ['created', 'POST', (hooks) => hooks.create.mutate(todoFixture)],
+  [
+    'updated',
+    'PATCH',
+    (hooks) => hooks.update.mutate({ id: 7, input: { completed: true } }),
+  ],
+  ['deleted', 'DELETE', (hooks) => hooks.remove.mutate(7)],
 ])(
-  'is busy while a $name mutation is pending and idle once it settles',
-  async ({ key }) => {
-    const { result, resolve } = renderWithMutation(key)
-    act(() => result.current.mutation.mutate())
+  'is busy while a task is being %s and idle once the server answers',
+  async (_, method, start) => {
+    const api = installFakeApi([todoFixture])
+    const release = api.delayNextResponse(method)
+    const result = renderBusy()
+    act(() => start(result.current))
     await waitFor(() => expect(result.current.busy).toBe(true))
-    act(() => resolve())
+    act(() => release())
     await waitFor(() => expect(result.current.busy).toBe(false))
   },
 )
 
-it('ignores mutations outside the tasks key', async () => {
-  const { result, resolve } = renderWithMutation(['profile', 'update'])
-  act(() => result.current.mutation.mutate())
-  await waitFor(() => expect(result.current.mutation.isPending).toBe(true))
+it('stays idle while the task list is loading', async () => {
+  const api = installFakeApi([todoFixture])
+  const release = api.delayNextResponse('GET')
+  const { result } = renderHook(
+    () => ({ busy: useTodosBusy(), list: useTodosQuery() }),
+    { wrapper: queryWrapper(createTestQueryClient()) },
+  )
+  await waitFor(() => expect(api.requests).toHaveLength(1))
+  expect(result.current.list.isFetching).toBe(true)
   expect(result.current.busy).toBe(false)
-  act(() => resolve())
+  act(() => release())
 })

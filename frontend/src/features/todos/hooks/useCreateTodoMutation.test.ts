@@ -1,80 +1,96 @@
-import { act, renderHook } from '@testing-library/react'
-import { beforeEach, expect, it, vi } from 'vitest'
+import { act, renderHook, waitFor } from '@testing-library/react'
+import { expect, it } from 'vitest'
+import { installFakeApi } from '../../../test/fakeApi'
 import { createTestQueryClient, queryWrapper } from '../../../test/queryWrapper'
 import { todoFixture } from '../../../test/todoFixture'
 import { todoKeys } from '../api/queryKeys'
-import { todosApi } from '../api/todos'
-import type { Todo } from '../types'
+import type { Todo, TodoInput } from '../types'
 import { useCreateTodoMutation } from './useCreateTodoMutation'
+import { useTodosQuery } from './useTodosQuery'
 
-vi.mock('../api/todos', () => ({
-  todosApi: {
-    list: vi.fn(),
-    create: vi.fn(),
-    update: vi.fn(),
-    remove: vi.fn(),
-  },
-}))
-beforeEach(() => vi.clearAllMocks())
+const input: TodoInput = {
+  title: 'Buy milk',
+  description: 'Two litres',
+  priority: 'high',
+  due_date: '2026-11-02',
+  completed: false,
+}
+const older: Todo = { ...todoFixture, id: 3, title: 'Older' }
 
-function setup(initial?: Todo[]) {
+function renderCreate(cached?: Todo[]) {
   const client = createTestQueryClient()
-  if (initial) client.setQueryData(todoKeys.list, initial)
+  if (cached) client.setQueryData(todoKeys.list, cached)
   const { result } = renderHook(() => useCreateTodoMutation(), {
     wrapper: queryWrapper(client),
   })
-  return { client, result }
+  const cachedList = () => client.getQueryData<Todo[]>(todoKeys.list)
+  async function create() {
+    let created!: Todo
+    await act(async () => {
+      created = await result.current.mutateAsync(input)
+    })
+    return created
+  }
+  return { result, cachedList, create }
 }
 
-it('sends the input to the API', async () => {
-  vi.mocked(todosApi.create).mockResolvedValue(todoFixture)
-  const { result } = setup([])
-  await act(() => result.current.mutateAsync(todoFixture))
-  expect(todosApi.create).toHaveBeenCalledWith(todoFixture)
+it('resolves with the task the server created from the input', async () => {
+  installFakeApi()
+  const { create } = renderCreate([])
+  expect(await create()).toMatchObject(input)
 })
 
-it('prepends the saved task to the cached list', async () => {
-  const older = { ...todoFixture, id: 3, title: 'Older' }
-  const saved = { ...todoFixture, id: 8, title: 'Saved' }
-  vi.mocked(todosApi.create).mockResolvedValue(saved)
-  const { client, result } = setup([older])
-  await act(() => result.current.mutateAsync(saved))
-  expect(client.getQueryData(todoKeys.list)).toEqual([saved, older])
+it('prepends the created task to the cached list', async () => {
+  installFakeApi([older])
+  const { cachedList, create } = renderCreate([older])
+  const created = await create()
+  expect(cachedList()).toEqual([created, older])
 })
 
-it('replaces a cached copy of the saved task instead of duplicating it', async () => {
-  const stale = { ...todoFixture, id: 8, title: 'Stale' }
-  const other = { ...todoFixture, id: 3 }
-  const saved = { ...todoFixture, id: 8, title: 'Saved' }
-  vi.mocked(todosApi.create).mockResolvedValue(saved)
-  const { client, result } = setup([stale, other])
-  await act(() => result.current.mutateAsync(saved))
-  expect(client.getQueryData(todoKeys.list)).toEqual([saved, other])
+it('replaces a cached copy of the created task instead of duplicating it', async () => {
+  installFakeApi([older], { nextId: 40 })
+  const stale = { ...todoFixture, id: 40, title: 'Stale copy' }
+  const { cachedList, create } = renderCreate([stale, older])
+  const created = await create()
+  expect(cachedList()).toEqual([created, older])
 })
 
-it('creates the cached list when none is loaded yet', async () => {
-  vi.mocked(todosApi.create).mockResolvedValue(todoFixture)
-  const { client, result } = setup()
-  await act(() => result.current.mutateAsync(todoFixture))
-  expect(client.getQueryData(todoKeys.list)).toEqual([todoFixture])
+it('starts the cached list when none is loaded yet', async () => {
+  installFakeApi()
+  const { cachedList, create } = renderCreate()
+  const created = await create()
+  expect(cachedList()).toEqual([created])
 })
 
-it('leaves the cache untouched and rejects when the API fails', async () => {
-  vi.mocked(todosApi.create).mockRejectedValue(new Error('Server down'))
-  const { client, result } = setup([todoFixture])
+it('keeps the cache and exposes the server message when creation fails', async () => {
+  const api = installFakeApi([older])
+  api.failNext('POST', 500, 'Database unavailable')
+  const { result, cachedList } = renderCreate([older])
   await act(() =>
-    expect(result.current.mutateAsync(todoFixture)).rejects.toThrow(
-      'Server down',
+    expect(result.current.mutateAsync(input)).rejects.toThrow(
+      'Database unavailable',
     ),
   )
-  expect(client.getQueryData(todoKeys.list)).toEqual([todoFixture])
+  await waitFor(() =>
+    expect(result.current.error?.message).toBe('Database unavailable'),
+  )
+  expect(cachedList()).toEqual([older])
 })
 
-it('registers under the create mutation key', async () => {
-  vi.mocked(todosApi.create).mockResolvedValue(todoFixture)
-  const { client, result } = setup([])
-  await act(() => result.current.mutateAsync(todoFixture))
-  expect(
-    client.getMutationCache().findAll({ mutationKey: todoKeys.create }),
-  ).toHaveLength(1)
+it('keeps the created task when an older list request finishes afterwards', async () => {
+  const api = installFakeApi([older])
+  const { result } = renderHook(
+    () => ({ list: useTodosQuery(), create: useCreateTodoMutation() }),
+    { wrapper: queryWrapper(createTestQueryClient()) },
+  )
+  await waitFor(() => expect(result.current.list.data).toEqual([older]))
+  const release = api.delayNextResponse('GET')
+  act(() => void result.current.list.refetch())
+  await waitFor(() => expect(api.requestsTo('GET')).toHaveLength(2))
+  let created!: Todo
+  await act(async () => {
+    created = await result.current.create.mutateAsync(input)
+  })
+  await act(async () => release())
+  expect(result.current.list.data).toEqual([created, older])
 })

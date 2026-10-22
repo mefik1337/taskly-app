@@ -1,38 +1,40 @@
-import { renderHook, waitFor } from '@testing-library/react'
-import { beforeEach, expect, it, vi } from 'vitest'
+import { act, renderHook, waitFor } from '@testing-library/react'
+import { expect, it } from 'vitest'
+import { installFakeApi } from '../../../test/fakeApi'
 import { createTestQueryClient, queryWrapper } from '../../../test/queryWrapper'
 import { todoFixture } from '../../../test/todoFixture'
-import { todoKeys } from '../api/queryKeys'
-import { todosApi } from '../api/todos'
 import { useTodosQuery } from './useTodosQuery'
 
-vi.mock('../api/todos', () => ({
-  todosApi: {
-    list: vi.fn(),
-    create: vi.fn(),
-    update: vi.fn(),
-    remove: vi.fn(),
-  },
-}))
-beforeEach(() => vi.clearAllMocks())
-
-it('loads tasks with an abort signal and caches them under the list key', async () => {
-  vi.mocked(todosApi.list).mockResolvedValue([todoFixture])
+function renderQuery() {
   const client = createTestQueryClient()
   const { result } = renderHook(() => useTodosQuery(), {
     wrapper: queryWrapper(client),
   })
+  return { client, result }
+}
+
+it('loads the tasks from GET /api/todos', async () => {
+  const api = installFakeApi([todoFixture])
+  const { result } = renderQuery()
   await waitFor(() => expect(result.current.isSuccess).toBe(true))
   expect(result.current.data).toEqual([todoFixture])
-  expect(todosApi.list).toHaveBeenCalledWith(expect.any(AbortSignal))
-  expect(client.getQueryData(todoKeys.list)).toEqual([todoFixture])
+  expect(api.requests).toMatchObject([{ method: 'GET', url: '/api/todos' }])
 })
 
-it('exposes the API error when loading fails', async () => {
-  vi.mocked(todosApi.list).mockRejectedValue(new Error('Server down'))
-  const { result } = renderHook(() => useTodosQuery(), {
-    wrapper: queryWrapper(createTestQueryClient()),
-  })
+it('exposes the server message when loading fails', async () => {
+  const api = installFakeApi()
+  api.failNext('GET', 503, 'The server is unavailable.')
+  const { result } = renderQuery()
   await waitFor(() => expect(result.current.isError).toBe(true))
-  expect(result.current.error?.message).toBe('Server down')
+  expect(result.current.error?.message).toBe('The server is unavailable.')
+})
+
+it('aborts the request when the query is cancelled', async () => {
+  const api = installFakeApi([todoFixture])
+  const release = api.delayNextResponse('GET')
+  const { client } = renderQuery()
+  await waitFor(() => expect(api.requests).toHaveLength(1))
+  await act(() => client.cancelQueries())
+  expect(api.requests[0].signal?.aborted).toBe(true)
+  release()
 })

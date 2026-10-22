@@ -1,5 +1,6 @@
-import { act, renderHook } from '@testing-library/react'
-import { beforeEach, expect, it, vi } from 'vitest'
+import { act, renderHook, waitFor } from '@testing-library/react'
+import { expect, it } from 'vitest'
+import { installFakeApi } from '../../../test/fakeApi'
 import { createTestQueryClient, queryWrapper } from '../../../test/queryWrapper'
 import { todoFixture } from '../../../test/todoFixture'
 import { todoKeys } from '../api/queryKeys'
@@ -7,61 +8,47 @@ import { todosApi } from '../api/todos'
 import type { Todo } from '../types'
 import { useDeleteTodoMutation } from './useDeleteTodoMutation'
 
-vi.mock('../api/todos', () => ({
-  todosApi: {
-    list: vi.fn(),
-    create: vi.fn(),
-    update: vi.fn(),
-    remove: vi.fn(),
-  },
-}))
-beforeEach(() => vi.clearAllMocks())
+const other: Todo = { ...todoFixture, id: 3, title: 'Other' }
 
-function setup(initial?: Todo[]) {
+function renderDelete(cached?: Todo[]) {
   const client = createTestQueryClient()
-  if (initial) client.setQueryData(todoKeys.list, initial)
+  if (cached) client.setQueryData(todoKeys.list, cached)
   const { result } = renderHook(() => useDeleteTodoMutation(), {
     wrapper: queryWrapper(client),
   })
-  return { client, result }
+  const cachedList = () => client.getQueryData<Todo[]>(todoKeys.list)
+  return { result, cachedList }
 }
 
-it('deletes the task by id through the API', async () => {
-  vi.mocked(todosApi.remove).mockResolvedValue(undefined)
-  const { result } = setup([todoFixture])
+it('removes the task on the server so a reload no longer lists it', async () => {
+  installFakeApi([todoFixture, other])
+  const { result } = renderDelete([todoFixture, other])
   await act(() => result.current.mutateAsync(7))
-  expect(todosApi.remove).toHaveBeenCalledWith(7)
+  await expect(todosApi.list()).resolves.toEqual([other])
 })
 
 it('removes only the deleted task from the cached list', async () => {
-  const other = { ...todoFixture, id: 3 }
-  vi.mocked(todosApi.remove).mockResolvedValue(undefined)
-  const { client, result } = setup([todoFixture, other])
-  await act(() => result.current.mutateAsync(todoFixture.id))
-  expect(client.getQueryData(todoKeys.list)).toEqual([other])
-})
-
-it('keeps the cache empty when no list is loaded', async () => {
-  vi.mocked(todosApi.remove).mockResolvedValue(undefined)
-  const { client, result } = setup()
+  installFakeApi([todoFixture, other])
+  const { result, cachedList } = renderDelete([todoFixture, other])
   await act(() => result.current.mutateAsync(7))
-  expect(client.getQueryData(todoKeys.list)).toBeUndefined()
+  expect(cachedList()).toEqual([other])
 })
 
-it('keeps the task cached and rejects when the API fails', async () => {
-  vi.mocked(todosApi.remove).mockRejectedValue(new Error('Cannot delete'))
-  const { client, result } = setup([todoFixture])
+it('leaves the list unloaded when none is cached', async () => {
+  installFakeApi([todoFixture])
+  const { result, cachedList } = renderDelete()
+  await act(() => result.current.mutateAsync(7))
+  expect(cachedList()).toBeUndefined()
+})
+
+it('keeps the task cached and exposes the server message when the task is already gone', async () => {
+  installFakeApi([])
+  const { result, cachedList } = renderDelete([todoFixture])
   await act(() =>
-    expect(result.current.mutateAsync(7)).rejects.toThrow('Cannot delete'),
+    expect(result.current.mutateAsync(7)).rejects.toThrow('Task not found.'),
   )
-  expect(client.getQueryData(todoKeys.list)).toEqual([todoFixture])
-})
-
-it('registers under the delete mutation key', async () => {
-  vi.mocked(todosApi.remove).mockResolvedValue(undefined)
-  const { client, result } = setup([])
-  await act(() => result.current.mutateAsync(7))
-  expect(
-    client.getMutationCache().findAll({ mutationKey: todoKeys.delete }),
-  ).toHaveLength(1)
+  await waitFor(() =>
+    expect(result.current.error?.message).toBe('Task not found.'),
+  )
+  expect(cachedList()).toEqual([todoFixture])
 })

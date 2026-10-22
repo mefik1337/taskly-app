@@ -1,62 +1,81 @@
-import { beforeEach, expect, it, vi } from 'vitest'
-import { request } from '../../../lib/http'
+import { expect, it } from 'vitest'
+import { installFakeApi } from '../../../test/fakeApi'
 import { todoFixture } from '../../../test/todoFixture'
 import { todosApi } from './todos'
 
-vi.mock('../../../lib/http', () => ({ request: vi.fn() }))
-beforeEach(() => vi.clearAllMocks())
-
-it('passes the abort signal when fetching tasks', async () => {
-  const signal = new AbortController().signal
-  vi.mocked(request).mockResolvedValue([todoFixture])
-  await expect(todosApi.list(signal)).resolves.toEqual([todoFixture])
-  expect(request).toHaveBeenCalledWith('/todos', { signal })
+it('loads the task list with GET /api/todos', async () => {
+  const api = installFakeApi([todoFixture])
+  await expect(todosApi.list()).resolves.toEqual([todoFixture])
+  expect(api.requests).toEqual([
+    { method: 'GET', url: '/api/todos', body: undefined, signal: undefined },
+  ])
 })
 
-it('sends only writable task fields on creation', async () => {
-  vi.mocked(request).mockResolvedValue(todoFixture)
-  await expect(todosApi.create(todoFixture)).resolves.toEqual(todoFixture)
-  expect(request).toHaveBeenCalledWith('/todos', {
-    method: 'POST',
-    body: JSON.stringify({
-      title: todoFixture.title,
-      description: '',
-      priority: 'medium',
-      due_date: null,
-      completed: false,
-    }),
+it('hands the abort signal to the list request', async () => {
+  const api = installFakeApi()
+  const controller = new AbortController()
+  await todosApi.list(controller.signal)
+  expect(api.requests[0].signal).toBe(controller.signal)
+})
+
+it('creates a task with POST /api/todos sending only writable fields', async () => {
+  const api = installFakeApi()
+  await expect(todosApi.create(todoFixture)).resolves.toMatchObject({
+    title: 'Prepare a demo',
+    priority: 'medium',
   })
+  expect(api.requests).toEqual([
+    {
+      method: 'POST',
+      url: '/api/todos',
+      body: {
+        title: 'Prepare a demo',
+        description: '',
+        priority: 'medium',
+        due_date: null,
+        completed: false,
+      },
+      signal: undefined,
+    },
+  ])
 })
 
-it('patches a task by id with only writable task fields', async () => {
-  const saved = { ...todoFixture, completed: true }
-  vi.mocked(request).mockResolvedValue(saved)
+it('patches a task by id sending only writable fields', async () => {
+  const api = installFakeApi([todoFixture])
   await expect(
     todosApi.update(7, { ...todoFixture, completed: true }),
-  ).resolves.toEqual(saved)
-  expect(request).toHaveBeenCalledWith('/todos/7', {
+  ).resolves.toMatchObject({ id: 7, completed: true })
+  expect(api.requests[0]).toMatchObject({
     method: 'PATCH',
-    body: JSON.stringify({
-      title: todoFixture.title,
+    url: '/api/todos/7',
+    body: {
+      title: 'Prepare a demo',
       description: '',
       priority: 'medium',
       due_date: null,
       completed: true,
-    }),
+    },
   })
 })
 
-it('patches only the fields provided in a partial update', async () => {
-  vi.mocked(request).mockResolvedValue(todoFixture)
+it('patches only the fields given in a partial update', async () => {
+  const api = installFakeApi([{ ...todoFixture, id: 3 }])
   await todosApi.update(3, { completed: false })
-  expect(request).toHaveBeenCalledWith('/todos/3', {
+  expect(api.requests[0]).toMatchObject({
     method: 'PATCH',
-    body: '{"completed":false}',
+    url: '/api/todos/3',
+    body: { completed: false },
   })
 })
 
-it('deletes a task by id', async () => {
-  vi.mocked(request).mockResolvedValue(undefined)
+it('deletes a task by id with DELETE and resolves without a body', async () => {
+  const other = { ...todoFixture, id: 3, title: 'Other' }
+  const api = installFakeApi([todoFixture, other])
   await expect(todosApi.remove(7)).resolves.toBeUndefined()
-  expect(request).toHaveBeenCalledWith('/todos/7', { method: 'DELETE' })
+  expect(api.requests[0]).toMatchObject({
+    method: 'DELETE',
+    url: '/api/todos/7',
+    body: undefined,
+  })
+  await expect(todosApi.list()).resolves.toEqual([other])
 })

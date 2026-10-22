@@ -1,14 +1,11 @@
-import { render, screen } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
+import { screen } from '@testing-library/react'
 import { expect, it, vi } from 'vitest'
+import { renderWithProviders } from '../../../test/queryWrapper'
 import { TodoEmptyState } from './TodoEmptyState'
 
-vi.mock('../../../design-system', () => import('../../../design-system/mocks'))
-
 it('invites creating the first task when there are no tasks', async () => {
-  const user = userEvent.setup()
   const onCreate = vi.fn()
-  render(
+  const { user } = renderWithProviders(
     <TodoEmptyState hasTodos={false} disabled={false} onCreate={onCreate} />,
   )
   expect(
@@ -21,10 +18,11 @@ it('invites creating the first task when there are no tasks', async () => {
   expect(onCreate).toHaveBeenCalledTimes(1)
 })
 
-it('disables the create button when disabled', async () => {
-  const user = userEvent.setup()
+it('blocks creating the first task while disabled', async () => {
   const onCreate = vi.fn()
-  render(<TodoEmptyState hasTodos={false} disabled onCreate={onCreate} />)
+  const { user } = renderWithProviders(
+    <TodoEmptyState hasTodos={false} disabled onCreate={onCreate} />,
+  )
   const button = screen.getByRole('button', { name: 'Add your first task' })
   expect(button).toBeDisabled()
   await user.click(button)
@@ -32,7 +30,9 @@ it('disables the create button when disabled', async () => {
 })
 
 it('reports no matching tasks without a create button when tasks exist', () => {
-  render(<TodoEmptyState hasTodos disabled={false} onCreate={vi.fn()} />)
+  renderWithProviders(
+    <TodoEmptyState hasTodos disabled={false} onCreate={vi.fn()} />,
+  )
   expect(
     screen.getByRole('heading', { name: 'No matching tasks' }),
   ).toBeVisible()

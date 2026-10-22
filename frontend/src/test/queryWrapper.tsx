@@ -1,5 +1,8 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import type { ReactNode } from 'react'
+import { QueryClient } from '@tanstack/react-query'
+import { render } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import type { ReactElement, ReactNode } from 'react'
+import { AppProviders } from '../app/AppProviders'
 
 export function createTestQueryClient() {
   return new QueryClient({
@@ -12,6 +15,14 @@ export function createTestQueryClient() {
 
 export function queryWrapper(client: QueryClient) {
   return function Wrapper({ children }: { children: ReactNode }) {
-    return <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    return <AppProviders client={client}>{children}</AppProviders>
   }
+}
+
+export function renderWithProviders(
+  ui: ReactElement,
+  client = createTestQueryClient(),
+) {
+  const user = userEvent.setup()
+  return { user, client, ...render(ui, { wrapper: queryWrapper(client) }) }
 }

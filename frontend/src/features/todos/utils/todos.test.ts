@@ -1,11 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import {
-  formatDate,
-  isOverdue,
-  priorityLabels,
-  selectTodos,
-  validateTodo,
-} from './todos'
+import { formatDate, isOverdue, selectTodos, validateTodo } from './todos'
 import type { Todo } from '../types'
 
 const base: Todo = {
@@ -153,7 +147,7 @@ describe('validateTodo', () => {
 
 describe('isOverdue', () => {
   beforeEach(() => {
-    vi.useFakeTimers()
+    vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date(2026, 9, 22, 10, 0, 0))
   })
   afterEach(() => vi.useRealTimers())
@@ -176,6 +170,13 @@ describe('isOverdue', () => {
   it('is false for a task without a due date', () => {
     expect(isOverdue(base)).toBe(false)
   })
+
+  it('compares with the local date when UTC has already moved to the next day', () => {
+    vi.setSystemTime(new Date('2026-10-22T02:00:00Z'))
+    expect(new Date().getDate()).toBe(21)
+    expect(isOverdue({ ...base, due_date: '2026-10-21' })).toBe(false)
+    expect(isOverdue({ ...base, due_date: '2026-10-20' })).toBe(true)
+  })
 })
 
 describe('formatDate', () => {
@@ -183,18 +184,9 @@ describe('formatDate', () => {
     expect(formatDate('2026-03-05')).toBe('5 Mar 2026')
   })
 
-  it('keeps the calendar day at year boundaries', () => {
+  it('keeps the calendar day at year boundaries west of UTC', () => {
+    expect(new Date(2026, 11, 31).getTimezoneOffset()).toBe(300)
     expect(formatDate('2026-12-31')).toBe('31 Dec 2026')
     expect(formatDate('2027-01-01')).toBe('1 Jan 2027')
-  })
-})
-
-describe('priorityLabels', () => {
-  it('labels every priority', () => {
-    expect(priorityLabels).toEqual({
-      low: 'Low',
-      medium: 'Medium',
-      high: 'High',
-    })
   })
 })

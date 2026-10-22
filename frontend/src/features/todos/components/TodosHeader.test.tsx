@@ -1,25 +1,32 @@
-import { render, screen } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
+import { screen } from '@testing-library/react'
 import { expect, it, vi } from 'vitest'
+import { renderWithProviders } from '../../../test/queryWrapper'
 import { TodosHeader } from './TodosHeader'
 
-vi.mock('../../../design-system', () => import('../../../design-system/mocks'))
-
-it('invokes creation when enabled and blocks it when disabled', async () => {
-  const user = userEvent.setup()
-  const onCreate = vi.fn()
-  const { rerender } = render(
-    <TodosHeader disabled={false} onCreate={onCreate} />,
-  )
-  expect(screen.getByRole('heading', { name: 'Tasks' })).toBeVisible()
+it('introduces the tasks page', () => {
+  renderWithProviders(<TodosHeader disabled={false} onCreate={vi.fn()} />)
+  expect(screen.getByRole('heading', { level: 1, name: 'Tasks' })).toBeVisible()
   expect(
     screen.getByText('Create, organize, and complete tasks.'),
   ).toBeVisible()
-  const button = screen.getByRole('button', { name: 'New task' })
-  await user.click(button)
+})
+
+it('starts task creation from New task', async () => {
+  const onCreate = vi.fn()
+  const { user } = renderWithProviders(
+    <TodosHeader disabled={false} onCreate={onCreate} />,
+  )
+  await user.click(screen.getByRole('button', { name: 'New task' }))
   expect(onCreate).toHaveBeenCalledTimes(1)
-  rerender(<TodosHeader disabled onCreate={onCreate} />)
+})
+
+it('blocks New task while disabled', async () => {
+  const onCreate = vi.fn()
+  const { user } = renderWithProviders(
+    <TodosHeader disabled onCreate={onCreate} />,
+  )
+  const button = screen.getByRole('button', { name: 'New task' })
   expect(button).toBeDisabled()
   await user.click(button)
-  expect(onCreate).toHaveBeenCalledTimes(1)
+  expect(onCreate).not.toHaveBeenCalled()
 })

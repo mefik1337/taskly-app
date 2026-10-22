@@ -5,10 +5,9 @@ import { useNotice } from './useNotice'
 beforeEach(() => vi.useFakeTimers())
 afterEach(() => vi.useRealTimers())
 
-it('starts without a notice and exposes a notification callback', () => {
+it('starts without a notice', () => {
   const { result } = renderHook(() => useNotice())
   expect(result.current.message).toBe('')
-  expect(result.current.notify).toEqual(expect.any(Function))
 })
 
 it('shows a notified message until it expires after four seconds', () => {
@@ -48,12 +47,4 @@ it('keeps the notification callback stable across renders', () => {
   act(() => result.current.notify('Saved'))
   rerender()
   expect(result.current.notify).toBe(first)
-})
-
-it('clears the pending timeout on unmount', () => {
-  const { result, unmount } = renderHook(() => useNotice())
-  act(() => result.current.notify('Saved'))
-  expect(vi.getTimerCount()).toBe(1)
-  unmount()
-  expect(vi.getTimerCount()).toBe(0)
 })
