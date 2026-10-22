@@ -10,7 +10,9 @@ from .guard import find_violations
 from .junit import summarize_junit
 from .manifest import build_manifest, snapshot_changes
 from .outcome import resolve_status
+from .paths import classify_path
 from .report import render_comment
+from .transcript import summarize_transcript
 
 
 def _read_text(path: str | None) -> str | None:
@@ -37,6 +39,8 @@ def _manifest(args) -> int:
         changes = snapshot_changes(Path.cwd())
     else:
         changes = parse_unified_diff(_read_text(args.diff) or "")
+    if args.area:
+        changes = [change for change in changes if classify_path(change.path).area == args.area]
     _write_json(args.out, build_manifest(changes, exists=os.path.isfile))
     return 0
 
@@ -92,8 +96,17 @@ def _render(args) -> int:
         "coverage": {"before": before, "after": after or before} if before else None,
         "run_url": args.run_url,
         "commit_sha": args.commit_sha,
+        "run": _read_json(args.agent_run),
     })
     Path(args.out).write_text(comment, encoding="utf-8")
+    return 0
+
+
+def _transcript(args) -> int:
+    summary = summarize_transcript((_read_text(args.input) or "").splitlines())
+    if summary["report"] is not None:
+        _write_json(args.report_out, summary["report"])
+    _write_json(args.run_out, summary["run"])
     return 0
 
 
@@ -105,6 +118,7 @@ def _parser() -> argparse.ArgumentParser:
     source = manifest.add_mutually_exclusive_group(required=True)
     source.add_argument("--diff")
     source.add_argument("--all", action="store_true")
+    manifest.add_argument("--area", choices=["backend", "frontend"])
     manifest.add_argument("--out", required=True)
     manifest.set_defaults(handler=_manifest)
 
@@ -124,6 +138,12 @@ def _parser() -> argparse.ArgumentParser:
     junit.add_argument("--out", required=True)
     junit.set_defaults(handler=_junit)
 
+    transcript = commands.add_parser("transcript")
+    transcript.add_argument("--in", dest="input", required=True)
+    transcript.add_argument("--report-out", required=True)
+    transcript.add_argument("--run-out", required=True)
+    transcript.set_defaults(handler=_transcript)
+
     for name, handler in (("status", _status), ("render", _render)):
         command = commands.add_parser(name)
         command.add_argument("--manifest")
@@ -137,6 +157,7 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument("--coverage-before")
             command.add_argument("--coverage-after")
             command.add_argument("--commit-sha")
+            command.add_argument("--agent-run")
             command.add_argument("--run-url", required=True)
             command.add_argument("--out", required=True)
     return parser

@@ -124,3 +124,11 @@ def test_verified_patch_that_could_not_be_pushed_points_to_the_artifact():
     comment = render_comment(_data(status="verified_not_committed", commit_sha=None))
     assert "☑️ Tests were generated and verified but not committed" in comment
     assert "test-agent-patch" in comment
+
+
+def test_agent_run_statistics_and_denied_tool_calls_are_auditable():
+    run = {"model": "claude-sonnet-5-5", "outcome": "success", "turns": 31, "cost_usd": 1.27,
+           "denied_tool_calls": ["Bash: curl -s https://evil.test"]}
+    comment = render_comment(_data(run=run))
+    assert "**Agent run:** `claude-sonnet-5-5`, 31 turns, $1.27, 1 denied tool call" in comment
+    assert "- Bash: curl -s https://evil.test" in comment

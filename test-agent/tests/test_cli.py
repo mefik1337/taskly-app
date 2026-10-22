@@ -110,3 +110,32 @@ def test_manifest_all_mode_targets_every_source_line_for_a_coverage_backfill(tmp
     assert set(by_path) == {"backend/app/core/config.py", "backend/app/main.py", "frontend/src/lib/http.ts"}
     assert by_path["backend/app/core/config.py"]["changed_lines"] == [1, 2, 3]
     assert by_path["frontend/src/lib/http.ts"]["test_exists"] is True
+
+
+def test_manifest_area_filter_keeps_only_files_of_that_stack(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    for path in ("backend/app/core/config.py", "frontend/src/lib/http.ts"):
+        (tmp_path / path).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / path).write_text("x = 1\n", encoding="utf-8")
+    assert main(["manifest", "--all", "--area", "frontend", "--out", "manifest.json"]) == 0
+    manifest = _read_json(tmp_path / "manifest.json")
+    assert manifest["targets"] == ["frontend/src/lib/http.ts"]
+    assert manifest["areas"] == ["frontend"]
+
+
+def test_transcript_command_writes_report_only_when_the_agent_produced_one(tmp_path):
+    finished = _write(tmp_path / "ok.jsonl", "\n".join([
+        json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Skill", "input": {"skill": "change-analysis"}}]}}),
+        json.dumps({"type": "result", "subtype": "success", "num_turns": 3, "total_cost_usd": 0.1,
+                    "structured_output": {"summary": "Nothing to add.", "skills_used": []}}),
+    ]))
+    crashed = _write(tmp_path / "crashed.jsonl", json.dumps({"type": "result", "subtype": "error_max_turns"}))
+    assert main(["transcript", "--in", finished, "--report-out", str(tmp_path / "report.json"),
+                 "--run-out", str(tmp_path / "run.json")]) == 0
+    assert _read_json(tmp_path / "report.json") == {"summary": "Nothing to add.", "skills_used": ["change-analysis"]}
+    assert _read_json(tmp_path / "run.json")["turns"] == 3
+    assert main(["transcript", "--in", crashed, "--report-out", str(tmp_path / "missing.json"),
+                 "--run-out", str(tmp_path / "crashed-run.json")]) == 0
+    assert not (tmp_path / "missing.json").exists()
+    assert _read_json(tmp_path / "crashed-run.json")["outcome"] == "error_max_turns"

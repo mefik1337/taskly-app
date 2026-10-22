@@ -116,6 +116,20 @@ def _agent_sections(agent: dict | None) -> list[list[str]]:
     ]
 
 
+def _agent_run(run: dict | None) -> list[str]:
+    if not run:
+        return []
+    denied = run.get("denied_tool_calls") or []
+    noun = "call" if len(denied) == 1 else "calls"
+    lines = [
+        f"**Agent run:** {_code(run.get('model') or 'unknown')}, {run.get('turns') or 0} turns, "
+        f"${run.get('cost_usd') or 0:.2f}, {len(denied)} denied tool {noun}"
+    ]
+    if denied:
+        lines += ["", *(f"- {_text(call)}" for call in denied)]
+    return lines
+
+
 def render_comment(data: dict) -> str:
     agent = data["agent"]
     headline = HEADLINES[data["status"]].format(commit=(data.get("commit_sha") or "")[:7])
@@ -126,6 +140,7 @@ def render_comment(data: dict) -> str:
         _suspected_bugs(agent) if agent else [],
         _coverage(data["coverage"]) if data["coverage"] else [],
         ["### Skills used", "", ", ".join(_code(skill) for skill in agent["skills_used"])] if agent else [],
+        _agent_run(data.get("run")),
         [f"[Workflow run]({data['run_url']})"],
     ]
     return "\n\n".join("\n".join(section) for section in sections if section) + "\n"
