@@ -12,3 +12,8 @@ htmlcov/
 *.db-wal
 .env
 .DS_Store
+.test-agent/
+CLAUDE.md
+CLAUDE.local.md
+.claude/settings.local.json
+.claude/worktrees/
