@@ -1,0 +1,38 @@
+name: CI (test agent)
+
+on:
+  push:
+    branches: [main]
+    paths: &paths
+      - "test-agent/**"
+      - ".claude/**"
+      - ".github/actions/**"
+      - ".github/workflows/test-agent*.yml"
+      - ".github/workflows/ci-test-agent.yml"
+  pull_request:
+    paths: *paths
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-test-agent-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-test-agent
+        with:
+          requirements: test-agent/requirements-dev.txt
+      - name: Check the runner scripts
+        run: bash -n test-agent/bin/run-agent test-agent/bin/run-backend-tests test-agent/bin/run-frontend-tests
+      - name: Test the workflow tooling
+        working-directory: test-agent
+        run: .venv/bin/python -m pytest --cov --cov-report=term-missing

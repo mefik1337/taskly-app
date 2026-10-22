@@ -1,20 +1,20 @@
 name: Test agent
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      - "backend/**"
-      - "frontend/**"
+  workflow_call:
+    inputs:
+      stack:
+        description: The stack whose changes the agent covers, backend or frontend.
+        type: string
+        required: true
 
 permissions: {}
 
-concurrency:
-  group: test-agent-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
-
 env:
   CLAUDE_CODE_VERSION: "2.1.308"
+  STACK: ${{ inputs.stack }}
+  WORKSPACE: .test-agent/${{ inputs.stack }}
+  TEST_AGENT_PYTHON: test-agent/.venv/bin/python
   BASE_SHA: ${{ github.event.pull_request.base.sha }}
   HEAD_SHA: ${{ github.event.pull_request.head.sha }}
 
@@ -30,53 +30,28 @@ jobs:
     permissions:
       contents: read
     outputs:
-      has_targets: ${{ steps.manifest.outputs.has_targets }}
-      backend: ${{ steps.manifest.outputs.backend }}
-      frontend: ${{ steps.manifest.outputs.frontend }}
+      has_targets: ${{ steps.analysis.outputs.has_targets }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.HEAD_SHA }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Build the change manifest
-        id: manifest
-        run: |
-          mkdir -p .test-agent
-          git diff --no-color --unified=0 --find-renames "$BASE_SHA...$HEAD_SHA" > .test-agent/pr.diff
-          python3 test-agent/main.py manifest --diff .test-agent/pr.diff --out .test-agent/manifest.json
-          {
-            echo "has_targets=$(jq '.targets | length > 0' .test-agent/manifest.json)"
-            echo "backend=$(jq '.areas | index("backend") != null' .test-agent/manifest.json)"
-            echo "frontend=$(jq '.areas | index("frontend") != null' .test-agent/manifest.json)"
-          } >> "$GITHUB_OUTPUT"
-          jq '{targets, areas}' .test-agent/manifest.json
-      - if: steps.manifest.outputs.has_targets == 'true'
-        uses: ./.github/actions/setup-stacks
+      - uses: ./.github/actions/setup-test-agent
+      - uses: ./.github/actions/setup-stack
         with:
-          backend: ${{ steps.manifest.outputs.backend }}
-          frontend: ${{ steps.manifest.outputs.frontend }}
-      - name: Measure changed-line coverage before the agent
-        if: steps.manifest.outputs.has_targets == 'true'
-        env:
-          RUN_BACKEND: ${{ steps.manifest.outputs.backend }}
-          RUN_FRONTEND: ${{ steps.manifest.outputs.frontend }}
-          TEST_AGENT_OUT: ${{ github.workspace }}/.test-agent/before
+          stack: ${{ inputs.stack }}
+      - name: Measure the change before the agent
+        id: analysis
         run: |
-          if [[ "$RUN_BACKEND" == "true" ]]; then test-agent/bin/run-backend-tests || true; fi
-          if [[ "$RUN_FRONTEND" == "true" ]]; then test-agent/bin/run-frontend-tests || true; fi
-          python3 test-agent/main.py diff-coverage --manifest .test-agent/manifest.json \
-            --lcov backend=backend/coverage/lcov.info --lcov frontend=frontend/coverage/lcov.info \
-            --out .test-agent/coverage-before.json
-          jq .total .test-agent/coverage-before.json
+          "$TEST_AGENT_PYTHON" test-agent/main.py analyze --stack "$STACK" --base "$BASE_SHA" --workspace "$WORKSPACE"
+          echo "has_targets=$(jq '.targets | length > 0' "$WORKSPACE/analysis.json")" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: test-agent-analysis
+          name: test-agent-${{ inputs.stack }}-analysis
           path: |
-            .test-agent/pr.diff
-            .test-agent/manifest.json
-            .test-agent/coverage-before.json
-          if-no-files-found: ignore
+            ${{ env.WORKSPACE }}/pr.diff
+            ${{ env.WORKSPACE }}/analysis.json
           retention-days: 14
 
   generate:
@@ -99,12 +74,12 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: test-agent-analysis
-          path: .test-agent
-      - uses: ./.github/actions/setup-stacks
+          name: test-agent-${{ inputs.stack }}-analysis
+          path: ${{ env.WORKSPACE }}
+      - uses: ./.github/actions/setup-test-agent
+      - uses: ./.github/actions/setup-stack
         with:
-          backend: ${{ needs.analyze.outputs.backend }}
-          frontend: ${{ needs.analyze.outputs.frontend }}
+          stack: ${{ inputs.stack }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
@@ -121,41 +96,27 @@ jobs:
             echo "::error::Set the ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN secret in the test-agent environment."
             exit 1
           fi
-          test-agent/bin/run-agent --mode pr --base "$BASE_SHA" \
-            --manifest .test-agent/manifest.json --coverage .test-agent/coverage-before.json --out .test-agent
-      - name: Check the full suites after the agent
+          test-agent/bin/run-agent --stack "$STACK" --mode run --workspace "$WORKSPACE"
+      - name: Check the full suite after the agent
         id: selfcheck
-        env:
-          RUN_BACKEND: ${{ needs.analyze.outputs.backend }}
-          RUN_FRONTEND: ${{ needs.analyze.outputs.frontend }}
         run: |
-          if [[ ! -f .test-agent/agent-report.json ]]; then
-            echo "failed=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          reports=()
-          for area in backend frontend; do
-            enabled="RUN_${area^^}"
-            [[ "${!enabled}" == "true" ]] || continue
-            TEST_AGENT_OUT=.test-agent/selfcheck "test-agent/bin/run-$area-tests" || true
-            reports+=(--report "$area=.test-agent/selfcheck/$area-junit.xml")
-          done
-          python3 test-agent/main.py junit "${reports[@]}" --out .test-agent/selfcheck/suites.json
-          if python3 test-agent/main.py check-suites --suites .test-agent/selfcheck/suites.json; then
-            echo "failed=false" >> "$GITHUB_OUTPUT"
+          if [[ ! -f "$WORKSPACE/agent-report.json" ]]; then
+            echo "red=false" >> "$GITHUB_OUTPUT"
+          elif "$TEST_AGENT_PYTHON" test-agent/main.py selfcheck --stack "$STACK" --workspace "$WORKSPACE"; then
+            echo "red=false" >> "$GITHUB_OUTPUT"
           else
-            echo "failed=true" >> "$GITHUB_OUTPUT"
-            jq -c '[.[] | .failed_cases[]]' .test-agent/selfcheck/suites.json
+            echo "red=true" >> "$GITHUB_OUTPUT"
+            jq -c '.failed_cases' "$WORKSPACE/selfcheck.json"
           fi
       - name: Repair failing tests in the same agent session
-        if: steps.selfcheck.outputs.failed == 'true'
+        if: steps.selfcheck.outputs.red == 'true'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
           [[ -n "$ANTHROPIC_API_KEY" ]] || unset ANTHROPIC_API_KEY
           [[ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]] || unset CLAUDE_CODE_OAUTH_TOKEN
-          test-agent/bin/run-agent --mode repair --failures .test-agent/selfcheck/suites.json --out .test-agent
+          test-agent/bin/run-agent --stack "$STACK" --mode repair --workspace "$WORKSPACE"
       - name: Capture the agent's changes
         if: always()
         env:
@@ -163,21 +124,22 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
           git add --intent-to-add --all
-          git diff --no-color --binary > .test-agent/agent.patch
-          python3 test-agent/main.py redact --file .test-agent/agent.patch \
-            --env ANTHROPIC_API_KEY --env CLAUDE_CODE_OAUTH_TOKEN
-          python3 test-agent/main.py redact --file .test-agent/transcript.jsonl \
-            --env ANTHROPIC_API_KEY --env CLAUDE_CODE_OAUTH_TOKEN
-          git apply --numstat .test-agent/agent.patch || true
+          git diff --no-color --binary > "$WORKSPACE/agent.patch"
+          for file in agent.patch transcript.jsonl; do
+            "$TEST_AGENT_PYTHON" test-agent/main.py redact --file "$WORKSPACE/$file" \
+              --env ANTHROPIC_API_KEY --env CLAUDE_CODE_OAUTH_TOKEN
+          done
+          git apply --numstat "$WORKSPACE/agent.patch" || true
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
-          name: test-agent-output
+          name: test-agent-${{ inputs.stack }}-output
           path: |
-            .test-agent/agent.patch
-            .test-agent/agent-report.json
-            .test-agent/agent-run.json
-            .test-agent/transcript.jsonl
+            ${{ env.WORKSPACE }}/agent.patch
+            ${{ env.WORKSPACE }}/agent-report.json
+            ${{ env.WORKSPACE }}/agent-run.json
+            ${{ env.WORKSPACE }}/selfcheck.json
+            ${{ env.WORKSPACE }}/transcript.jsonl
           if-no-files-found: ignore
           retention-days: 14
 
@@ -195,73 +157,22 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: test-agent-analysis
-          path: .test-agent
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+          pattern: test-agent-${{ inputs.stack }}-*
+          merge-multiple: true
+          path: ${{ env.WORKSPACE }}
+      - uses: ./.github/actions/setup-test-agent
+      - uses: ./.github/actions/setup-stack
         with:
-          name: test-agent-output
-          path: .test-agent
-      - name: Guard and apply the agent's patch
-        id: patch
-        env:
-          PR_BACKEND: ${{ needs.analyze.outputs.backend }}
-          PR_FRONTEND: ${{ needs.analyze.outputs.frontend }}
+          stack: ${{ inputs.stack }}
+      - name: Guard, apply and re-run the agent's tests without secrets
         run: |
-          touch .test-agent/agent.patch
-          if python3 test-agent/main.py guard --diff .test-agent/agent.patch --out .test-agent/violations.json; then
-            if [[ -s .test-agent/agent.patch ]]; then git apply --whitespace=nowarn .test-agent/agent.patch; fi
-            echo "accepted=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "accepted=false" >> "$GITHUB_OUTPUT"
-          fi
-          git apply --numstat .test-agent/agent.patch 2>/dev/null | cut -f3 > .test-agent/agent-files.txt || true
-          for area in backend frontend; do
-            pr_flag="PR_${area^^}"
-            if [[ "${!pr_flag}" == "true" ]] || grep -q "^$area/" .test-agent/agent-files.txt; then
-              echo "$area=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "$area=false" >> "$GITHUB_OUTPUT"
-            fi
-          done
-      - uses: ./.github/actions/setup-stacks
-        if: steps.patch.outputs.accepted == 'true'
-        with:
-          backend: ${{ steps.patch.outputs.backend }}
-          frontend: ${{ steps.patch.outputs.frontend }}
-      - name: Run the suites and re-run the agent's tests
-        if: steps.patch.outputs.accepted == 'true'
-        env:
-          RUN_BACKEND: ${{ steps.patch.outputs.backend }}
-          RUN_FRONTEND: ${{ steps.patch.outputs.frontend }}
-        run: |
-          reports=()
-          for area in backend frontend; do
-            enabled="RUN_${area^^}"
-            [[ "${!enabled}" == "true" ]] || continue
-            TEST_AGENT_OUT=.test-agent/verify "test-agent/bin/run-$area-tests" || true
-            cp "$area/coverage/lcov.info" ".test-agent/verify/$area.lcov" || true
-            reports+=(--report "$area=.test-agent/verify/$area-junit.xml")
-            mapfile -t touched < <(grep -E "^$area/" .test-agent/agent-files.txt || true)
-            if (( ${#touched[@]} )); then
-              for attempt in 2 3; do
-                TEST_AGENT_OUT=".test-agent/rerun-$attempt" "test-agent/bin/run-$area-tests" "${touched[@]}" || true
-                reports+=(--report "$area agent tests, run $attempt=.test-agent/rerun-$attempt/$area-junit.xml")
-              done
-            fi
-          done
-          python3 test-agent/main.py junit "${reports[@]}" --out .test-agent/suites.json
-          python3 test-agent/main.py diff-coverage --manifest .test-agent/manifest.json \
-            --lcov backend=.test-agent/verify/backend.lcov --lcov frontend=.test-agent/verify/frontend.lcov \
-            --out .test-agent/coverage-after.json
-          jq . .test-agent/suites.json
+          "$TEST_AGENT_PYTHON" test-agent/main.py verify --stack "$STACK" --workspace "$WORKSPACE"
+          jq '{violations, suites: [.suites[] | {name, tests, failed}]}' "$WORKSPACE/verification.json"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
-          name: test-agent-verification
-          path: |
-            .test-agent/violations.json
-            .test-agent/suites.json
-            .test-agent/coverage-after.json
+          name: test-agent-${{ inputs.stack }}-verification
+          path: ${{ env.WORKSPACE }}/verification.json
           if-no-files-found: ignore
           retention-days: 14
 
@@ -286,32 +197,41 @@ jobs:
           ref: ${{ env.HEAD_SHA }}
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: test-agent-*
+          pattern: test-agent-${{ inputs.stack }}-*
           merge-multiple: true
-          path: .test-agent
+          path: ${{ env.WORKSPACE }}
+      - uses: ./.github/actions/setup-test-agent
       - name: Resolve the outcome
         id: outcome
         run: |
-          status=$(python3 test-agent/main.py status --manifest .test-agent/manifest.json \
-            --agent-report .test-agent/agent-report.json --violations .test-agent/violations.json \
-            --suites .test-agent/suites.json --patch .test-agent/agent.patch)
+          status=$("$TEST_AGENT_PYTHON" test-agent/main.py status --workspace "$WORKSPACE")
           echo "status=$status" >> "$GITHUB_OUTPUT"
           echo "Outcome: $status"
       - name: Commit the verified tests to the pull request branch
         id: commit
         if: steps.outcome.outputs.status == 'verified' && env.AUTO_COMMIT == 'true'
         run: |
-          python3 test-agent/main.py guard --diff .test-agent/agent.patch --out .test-agent/violations-publish.json
-          git apply --whitespace=nowarn .test-agent/agent.patch
+          "$TEST_AGENT_PYTHON" test-agent/main.py guard --stack "$STACK" --workspace "$WORKSPACE"
+          git apply --whitespace=nowarn "$WORKSPACE/agent.patch"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add --all -- backend/tests frontend/src
-          git commit --quiet --message "test: add unit tests for changes in #${PR_NUMBER}"
+          git add --all -- "$STACK"
+          git commit --quiet --message "test: add ${STACK} unit tests for #${PR_NUMBER}"
+          pushed=false
           if git push origin "HEAD:refs/heads/${HEAD_REF}"; then
-            echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-            gh workflow run ci.yml --ref "$HEAD_REF"
+            pushed=true
           else
-            echo "::warning::The branch moved since the agent ran; the verified patch is attached as an artifact instead."
+            git fetch --quiet origin "$HEAD_REF"
+            if git diff --quiet HEAD^ FETCH_HEAD -- "$STACK" && git rebase --quiet FETCH_HEAD \
+              && git push origin "HEAD:refs/heads/${HEAD_REF}"; then
+              pushed=true
+            fi
+          fi
+          if [[ "$pushed" == "true" ]]; then
+            echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+            gh workflow run "ci-${STACK}.yml" --ref "$HEAD_REF"
+          else
+            echo "::warning::The ${STACK} code moved since the agent ran; the verified patch is attached as an artifact instead."
           fi
       - name: Render the report
         env:
@@ -322,31 +242,32 @@ jobs:
           if [[ "$STATUS" == "verified" ]]; then
             if [[ -n "$COMMIT_SHA" ]]; then final=committed; else final=verified_not_committed; fi
           fi
-          python3 test-agent/main.py render --status "$final" --manifest .test-agent/manifest.json \
-            --agent-report .test-agent/agent-report.json --agent-run .test-agent/agent-run.json \
-            --violations .test-agent/violations.json --suites .test-agent/suites.json \
-            --coverage-before .test-agent/coverage-before.json --coverage-after .test-agent/coverage-after.json \
-            --commit-sha "$COMMIT_SHA" --run-url "$RUN_URL" --out .test-agent/comment.md
-          cat .test-agent/comment.md >> "$GITHUB_STEP_SUMMARY"
+          "$TEST_AGENT_PYTHON" test-agent/main.py comment --stack "$STACK" --workspace "$WORKSPACE" \
+            --status "$final" --commit-sha "$COMMIT_SHA" --run-url "$RUN_URL" --out "$WORKSPACE/comment.md"
+          cat "$WORKSPACE/comment.md" >> "$GITHUB_STEP_SUMMARY"
       - name: Publish the sticky pull request comment
         run: |
+          marker="<!-- taskly-test-agent:${STACK} -->"
           comment_id=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
-            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- taskly-test-agent -->"))) | .id' | head -n 1)
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"${marker}\"))) | .id" \
+            | head -n 1)
           if [[ -n "$comment_id" ]]; then
-            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" -F body=@.test-agent/comment.md > /dev/null
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" \
+              -F "body=@$WORKSPACE/comment.md" > /dev/null
           else
-            gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" -F body=@.test-agent/comment.md > /dev/null
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+              -F "body=@$WORKSPACE/comment.md" > /dev/null
           fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: steps.outcome.outputs.status == 'verified' && steps.commit.outputs.sha == ''
         with:
-          name: test-agent-patch
-          path: .test-agent/agent.patch
+          name: test-agent-${{ inputs.stack }}-patch
+          path: ${{ env.WORKSPACE }}/agent.patch
           retention-days: 14
       - name: Fail on rejected or failing tests
         if: steps.outcome.outputs.status == 'rejected' || steps.outcome.outputs.status == 'verification_failed'
         env:
           STATUS: ${{ steps.outcome.outputs.status }}
         run: |
-          echo "::error::Test agent outcome: $STATUS. See the pull request comment for details."
+          echo "::error::Test agent outcome for ${STACK}: $STATUS. See the pull request comment for details."
           exit 1

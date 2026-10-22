@@ -1,0 +1,23 @@
+name: Test agent (backend)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "backend/**"
+
+permissions: {}
+
+concurrency:
+  group: test-agent-backend-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  test-agent:
+    uses: ./.github/workflows/test-agent.yml
+    with:
+      stack: backend
+    permissions:
+      actions: write
+      contents: write
+      pull-requests: write

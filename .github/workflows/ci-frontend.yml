@@ -1,0 +1,40 @@
+name: CI (frontend)
+
+on:
+  push:
+    branches: [main]
+    paths: &paths
+      - "frontend/**"
+      - ".github/actions/setup-stack/**"
+      - ".github/workflows/ci-frontend.yml"
+  pull_request:
+    paths: *paths
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-frontend-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-stack
+        with:
+          stack: frontend
+      - name: Check formatting
+        working-directory: frontend
+        run: npm run format:check
+      - name: Type-check
+        working-directory: frontend
+        run: npm run typecheck
+      - name: Test with coverage
+        working-directory: frontend
+        run: npm run test:coverage

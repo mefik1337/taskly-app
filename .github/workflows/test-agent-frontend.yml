@@ -1,0 +1,23 @@
+name: Test agent (frontend)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "frontend/**"
+
+permissions: {}
+
+concurrency:
+  group: test-agent-frontend-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  test-agent:
+    uses: ./.github/workflows/test-agent.yml
+    with:
+      stack: frontend
+    permissions:
+      actions: write
+      contents: write
+      pull-requests: write
