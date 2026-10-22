@@ -1,6 +1,8 @@
+import re
 from xml.etree import ElementTree
 
 MAX_MESSAGE_LENGTH = 300
+ANSI_SEQUENCE = re.compile(r"(?:\x1b|#x1B)\[[0-9;]*[A-Za-z]")
 
 
 def _outcome(case: ElementTree.Element) -> tuple[str, ElementTree.Element | None]:
@@ -20,7 +22,7 @@ def summarize_junit(xml_text: str) -> dict:
         outcome, element = _outcome(case)
         counts[outcome] += 1
         if outcome in ("failure", "error"):
-            message = element.get("message") or (element.text or "").strip()
+            message = ANSI_SEQUENCE.sub("", element.get("message") or (element.text or "").strip())
             failed_cases.append({
                 "name": f"{case.get('classname', '')}::{case.get('name', '')}",
                 "message": message[:MAX_MESSAGE_LENGTH],

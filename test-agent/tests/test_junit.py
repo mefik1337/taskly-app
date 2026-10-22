@@ -37,3 +37,13 @@ def test_pytest_report_is_summarized_with_each_failing_case():
 def test_vitest_report_with_only_passing_cases():
     summary = summarize_junit(VITEST)
     assert (summary["tests"], summary["passed"], summary["failed_cases"]) == (2, 2, [])
+
+
+def test_terminal_colour_codes_are_stripped_from_failure_messages():
+    report = (
+        '<testsuite><testcase classname="tests.test_factory" name="test_routes">'
+        '<failure message="Left contains #x1B[33m\'/api/todos/completed\'#x1B[39;49;00m">trace</failure>'
+        "</testcase></testsuite>"
+    )
+    [case] = summarize_junit(report)["failed_cases"]
+    assert case["message"] == "Left contains '/api/todos/completed'"
