@@ -3,6 +3,8 @@ from datetime import datetime, timezone
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.pool import StaticPool
 
 from app.api.dependencies import get_repository
 from app.features.todos.router import router
@@ -48,3 +50,14 @@ def todo(todo_values):
 @pytest.fixture
 def model_factory():
     return lambda values: TodoRecord(**values)
+
+
+@pytest.fixture
+def sqlite_engine():
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    yield engine
+    engine.dispose()
