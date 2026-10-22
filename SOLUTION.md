@@ -109,7 +109,28 @@ The "Clear completed" feature is split into one pull request per stack. PR #1, w
 
 The first run ([39771416725](https://github.com/mefik1337/taskly-app/actions/runs/39771416725)) wrote nothing. The comment showed why: every `Edit` of a frontend test file was denied. The generated sandbox denied the stack's production root, `frontend/src`, and that root also holds the frontend tests; deny wins over allow. The safety net held: nothing was committed, coverage stayed at 50%, and the comment listed each denied call. The fix removed that rule, because `dontAsk` already refuses anything not allowed and the guard rejects it. A tooling test now checks that no deny rule shadows a test file the stack owns. The status for a run without changes was also reworded: "no new tests are needed" became "changed no files, see the decisions".
 
-The rerun on the fixed sandbox is [run 39772076120](https://github.com/mefik1337/taskly-app/actions/runs/39772076120), and its results are in the PR #3 comment.
+The second run ([39772076120](https://github.com/mefik1337/taskly-app/actions/runs/39772076120)) wrote the tests and passed verification, but `CI (frontend)` then failed its format check on the bot's commit. It exposed two more defects:
+
+- The frontend runner formats the files it runs, so verification tested formatted files while `publish` committed the raw patch. Now `verify` saves the tested files as `verified.patch`, and `publish` guards and commits exactly that.
+- A denied compound shell command convinced the agent that Bash was unavailable, so it never ran its own tests. The agent definition and `test-verification` now say that a refused compound command must be rewritten as one plain runner call.
+
+The final run ([39772879802](https://github.com/mefik1337/taskly-app/actions/runs/39772879802)), on a branch reset to the author's commit, completed the whole flow:
+
+| Changed file | Agent decision | Reason given |
+| --- | --- | --- |
+| `TodosPage.tsx` | updated tests | The clear flow, success notice, error alert and busy-disable were untested. The `if (busy) return` guard is unreachable because the button is disabled. |
+| `api/todos.ts` | updated tests | The `clearCompleted` request (`DELETE /api/todos/completed`) and its result had no test. |
+| `hooks/useClearCompletedMutation.ts` | created tests | A new hook with no test file. Cache pruning and the failure path needed pinning. |
+| `components/TodosHeader.tsx` | updated tests | The Clear completed button has visibility, count and disabled branches that no test covered. |
+| `test/fakeApi.ts` | updated tests | The shared fake was extended with `DELETE /api/todos/completed`. |
+| `utils/todos.ts`, `api/queryKeys.ts`, `types.ts` | skipped | Already pinned by the author's tests, a constant key exercised through the hook, and a type-only addition. |
+
+- **Skills invoked:** `change-analysis`, `vitest-unit-tests`, `test-verification`.
+- **Tests written:** 12 cases in five files. The agent ran them through the runner and they passed twice in a row.
+- **Independent verification:** full suite 177/177, and the agent's test files re-run twice (36/36 each time).
+- **Changed-line coverage:** 50% → 100%. `api/todos.ts` went from 0% to 100%, and `useClearCompletedMutation.ts` from 33% to 100%.
+- **Commit:** the bot committed `test: add frontend unit tests for #3` and dispatched `CI (frontend)`. The format check, type-check and tests all passed.
+- **Run:** Sonnet, 27 turns, $0.26 API-equivalent, one denied compound command, which the agent rewrote.
 
 ## Assumptions
 
@@ -124,7 +145,7 @@ The rerun on the fixed sandbox is [run 39772076120](https://github.com/mefik1337
 - V8 coverage is coarse for JSX, so frontend changed-line percentages are an indicator, not proof.
 - Correctness is checked by execution, re-runs and review. No mutation testing proves that each assertion catches a regression.
 - Model output varies. Borderline decisions (for example, whether a trivial helper needs a test) can differ between runs.
-- The bot's commit gets CI through `workflow_dispatch`. Branch protection that requires `pull_request`-event checks would need adjusting.
+- The bot's commit gets CI through `workflow_dispatch`. The `pull_request` runs GitHub creates for that push wait for approval (`action_required`). Branch protection that requires `pull_request`-event checks would need adjusting.
 - When both stacks commit to the same branch, the second push rebases only if the first touched no file of its stack. Otherwise the patch is attached instead.
 
 ## What I would change for production
