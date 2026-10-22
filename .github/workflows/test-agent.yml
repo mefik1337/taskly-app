@@ -230,6 +230,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
+      actions: write
       contents: write
       pull-requests: write
     env:
@@ -267,6 +268,7 @@ jobs:
           git commit --quiet --message "test: add unit tests for changes in #${PR_NUMBER}"
           if git push origin "HEAD:refs/heads/${HEAD_REF}"; then
             echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+            gh workflow run ci.yml --ref "$HEAD_REF"
           else
             echo "::warning::The branch moved since the agent ran; the verified patch is attached as an artifact instead."
           fi
