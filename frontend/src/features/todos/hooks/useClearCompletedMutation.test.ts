@@ -62,5 +62,6 @@ it('keeps cleared tasks gone when an older list request finishes afterwards', as
   await waitFor(() => expect(api.requestsTo('GET')).toHaveLength(2))
   await act(() => result.current.clear.mutateAsync())
   await act(async () => release())
+  await waitFor(() => expect(result.current.list.isFetching).toBe(false))
   expect(result.current.list.data).toEqual([active])
 })
