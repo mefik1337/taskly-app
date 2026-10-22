@@ -1,0 +1,61 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["summary", "decisions", "skills_used", "test_files", "suspected_bugs", "verification"],
+  "properties": {
+    "summary": { "type": "string", "maxLength": 600 },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "action", "reason", "test_file"],
+        "properties": {
+          "path": { "type": "string" },
+          "action": { "type": "string", "enum": ["created_tests", "updated_tests", "skipped"] },
+          "reason": { "type": "string", "maxLength": 400 },
+          "test_file": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "skills_used": { "type": "array", "items": { "type": "string" } },
+    "test_files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "change", "cases"],
+        "properties": {
+          "path": { "type": "string" },
+          "change": { "type": "string", "enum": ["created", "updated"] },
+          "cases": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "suspected_bugs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "description"],
+        "properties": {
+          "path": { "type": "string" },
+          "description": { "type": "string", "maxLength": 400 }
+        }
+      }
+    },
+    "verification": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["stack", "command", "passed"],
+        "properties": {
+          "stack": { "type": "string", "enum": ["backend", "frontend"] },
+          "command": { "type": "string" },
+          "passed": { "type": "boolean" }
+        }
+      }
+    }
+  }
+}

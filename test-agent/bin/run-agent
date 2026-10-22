@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  echo "usage: run-agent --mode pr|backfill --manifest FILE --coverage FILE [--base SHA] [--out DIR]" >&2
+  exit 2
+}
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+mode="" manifest="" coverage="" base="" out_dir=".test-agent"
+while (( $# )); do
+  case "$1" in
+    --mode) mode="${2:-}"; shift 2 ;;
+    --manifest) manifest="${2:-}"; shift 2 ;;
+    --coverage) coverage="${2:-}"; shift 2 ;;
+    --base) base="${2:-}"; shift 2 ;;
+    --out) out_dir="${2:-}"; shift 2 ;;
+    *) usage ;;
+  esac
+done
+
+[[ "$mode" == "pr" || "$mode" == "backfill" ]] || usage
+[[ "$mode" == "backfill" || "$base" =~ ^[0-9a-f]{40}$ ]] || { echo "run-agent: --base must be a full commit SHA in pr mode" >&2; exit 2; }
+for input in "$manifest" "$coverage"; do
+  [[ "$input" =~ ^[A-Za-z0-9._/-]+$ && "$input" != /* && "$input" != *..* && -f "$repo_root/$input" ]] \
+    || { echo "run-agent: inputs must be existing repository-relative files: $input" >&2; exit 2; }
+done
+
+model="${TEST_AGENT_MODEL:-claude-sonnet-5-5}"
+max_turns="${TEST_AGENT_MAX_TURNS:-80}"
+max_budget="${TEST_AGENT_MAX_BUDGET_USD:-5}"
+python_bin="${PYTHON:-python3}"
+
+if [[ "$mode" == "pr" ]]; then
+  base_line="Base commit: $base"
+else
+  base_line="Base commit: none. Backfill mode: every line of every target counts as changed."
+fi
+prompt="Mode: $mode
+Manifest: $manifest
+Coverage before your work: $coverage
+$base_line
+
+Work through your workflow and finish with the report."
+
+cd "$repo_root"
+mkdir -p "$out_dir"
+set +e
+claude -p "$prompt" \
+  --agent test-engineer \
+  --model "$model" \
+  --setting-sources project \
+  --settings test-agent/claude-settings.json \
+  --strict-mcp-config \
+  --permission-mode dontAsk \
+  --tools "Read,Edit,Write,Glob,Grep,Bash,Skill" \
+  --disallowedTools "WebFetch,WebSearch" \
+  --max-turns "$max_turns" \
+  --max-budget-usd "$max_budget" \
+  --json-schema "$(cat test-agent/report.schema.json)" \
+  --output-format stream-json --verbose \
+  --no-session-persistence \
+  < /dev/null > "$out_dir/transcript.jsonl"
+claude_status=$?
+set -e
+
+PYTHONPATH="$repo_root/test-agent" "$python_bin" -m pr_test_agent transcript \
+  --in "$out_dir/transcript.jsonl" \
+  --report-out "$out_dir/agent-report.json" \
+  --run-out "$out_dir/agent-run.json"
+echo "run-agent: claude exited with $claude_status"
+cat "$out_dir/agent-run.json"

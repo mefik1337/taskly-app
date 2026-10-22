@@ -1,0 +1,44 @@
+{
+  "permissions": {
+    "defaultMode": "dontAsk",
+    "allow": [
+      "Read",
+      "Glob",
+      "Grep",
+      "Skill",
+      "Edit(backend/tests/**)",
+      "Edit(frontend/src/**/*.test.ts)",
+      "Edit(frontend/src/**/*.test.tsx)",
+      "Edit(frontend/src/test/**)",
+      "Write(backend/tests/**)",
+      "Write(frontend/src/**/*.test.ts)",
+      "Write(frontend/src/**/*.test.tsx)",
+      "Write(frontend/src/test/**)",
+      "Bash(test-agent/bin/run-backend-tests *)",
+      "Bash(test-agent/bin/run-frontend-tests *)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git show *)",
+      "Bash(git status *)"
+    ],
+    "deny": [
+      "WebFetch",
+      "WebSearch",
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Edit(.github/**)",
+      "Edit(.claude/**)",
+      "Edit(test-agent/**)",
+      "Edit(backend/app/**)",
+      "Write(.github/**)",
+      "Write(.claude/**)",
+      "Write(test-agent/**)",
+      "Write(backend/app/**)"
+    ]
+  },
+  "env": {
+    "DISABLE_AUTOUPDATER": "1",
+    "DISABLE_TELEMETRY": "1",
+    "DISABLE_ERROR_REPORTING": "1"
+  }
+}
