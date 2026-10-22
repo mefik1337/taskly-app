@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN GITHUB_TOKEN GH_TOKEN ACTIONS_RUNTIME_TOKEN ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 out_dir="${TEST_AGENT_OUT:-$repo_root/.test-agent/out}"
 mkdir -p "$out_dir"
+out_dir="$(cd "$out_dir" && pwd)"
 
 targets=()
 for path in "$@"; do
