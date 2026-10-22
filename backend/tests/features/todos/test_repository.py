@@ -134,3 +134,16 @@ def test_delete_keeps_other_tasks(stored, repository, read_back, clock):
 def test_delete_unknown_id_returns_false_and_keeps_existing_tasks(stored, repository, read_back):
     assert repository.delete(404) is False
     assert read_back().list() == [stored]
+
+
+def test_delete_completed_removes_only_completed_tasks_and_counts_them(repository, read_back):
+    repository.create(TodoCreate(title="Done", completed=True))
+    kept = repository.create(TodoCreate(title="Open", completed=False))
+    repository.create(TodoCreate(title="Also done", completed=True))
+    assert repository.delete_completed() == 2
+    assert [todo.id for todo in read_back().list()] == [kept.id]
+
+
+def test_delete_completed_without_completed_tasks_keeps_everything(stored, repository, read_back):
+    assert repository.delete_completed() == 0
+    assert read_back().list() == [stored]
