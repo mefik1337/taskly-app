@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { formatDate, isOverdue, selectTodos, validateTodo } from './todos'
+import {
+  clearedMessage,
+  countCompleted,
+  formatDate,
+  isOverdue,
+  selectTodos,
+  validateTodo,
+} from './todos'
 import type { Todo } from '../types'
 
 const base: Todo = {
@@ -188,5 +195,26 @@ describe('formatDate', () => {
     expect(new Date(2026, 11, 31).getTimezoneOffset()).toBe(300)
     expect(formatDate('2026-12-31')).toBe('31 Dec 2026')
     expect(formatDate('2027-01-01')).toBe('1 Jan 2027')
+  })
+})
+
+describe('countCompleted', () => {
+  it('counts only the completed tasks', () => {
+    const todos = [
+      { ...base, id: 1, completed: true },
+      { ...base, id: 2, completed: false },
+      { ...base, id: 3, completed: true },
+    ]
+    expect(countCompleted(todos)).toBe(2)
+  })
+})
+
+describe('clearedMessage', () => {
+  it.each([
+    [0, 'There were no completed tasks to remove.'],
+    [1, 'Removed 1 completed task.'],
+    [3, 'Removed 3 completed tasks.'],
+  ])('describes %i removed tasks', (deleted, message) => {
+    expect(clearedMessage(deleted)).toBe(message)
   })
 })
