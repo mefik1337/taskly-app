@@ -36,6 +36,10 @@ class TodoUpdate(BaseModel):
         return validate_patch_fields(self)
 
 
+class ClearedTodos(BaseModel):
+    deleted: int
+
+
 class Todo(TodoCreate):
     id: int
     created_at: datetime
