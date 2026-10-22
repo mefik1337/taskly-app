@@ -7,6 +7,10 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
+    env: { TZ: 'America/New_York' },
+    clearMocks: true,
+    restoreMocks: true,
+    unstubGlobals: true,
     coverage: {
       provider: 'v8',
       include: ['src/**/*.{ts,tsx}'],
@@ -23,7 +27,7 @@ export default defineConfig({
         'src/features/todos/api/queryKeys.ts',
         'src/lib/queryClient.ts',
       ],
-      reporter: ['text', 'html', 'lcov', 'json-summary'],
+      reporter: ['text', 'html', 'cobertura', 'json-summary'],
       reportsDirectory: './coverage',
     },
   },
