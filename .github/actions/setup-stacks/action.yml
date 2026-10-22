@@ -13,7 +13,7 @@ runs:
     - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
       with:
         python-version: "3.12"
-        cache: pip
+        cache: ${{ inputs.backend == 'true' && 'pip' || '' }}
         cache-dependency-path: backend/requirements.txt
     - if: inputs.backend == 'true'
       shell: bash
