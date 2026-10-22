@@ -176,3 +176,19 @@ def test_deleted_task_is_no_longer_found(client):
 def test_delete_unknown_id_returns_404(client):
     response = client.delete("/api/todos/404")
     assert (response.status_code, response.json()) == (404, NOT_FOUND)
+
+
+def test_clear_completed_returns_count_and_keeps_open_tasks(client):
+    create(client, title="Done", completed=True)
+    kept = create(client, title="Open")
+    create(client, title="Also done", completed=True)
+    response = client.delete("/api/todos/completed")
+    assert (response.status_code, response.json()) == (200, {"deleted": 2})
+    assert client.get("/api/todos").json() == [kept]
+
+
+def test_clear_completed_without_completed_tasks_returns_zero(client):
+    kept = create(client, title="Open")
+    response = client.delete("/api/todos/completed")
+    assert (response.status_code, response.json()) == (200, {"deleted": 0})
+    assert client.get("/api/todos").json() == [kept]
