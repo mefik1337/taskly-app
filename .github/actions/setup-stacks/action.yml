@@ -1,0 +1,30 @@
+name: Set up application stacks
+description: Install the Python and Node.js toolchains and dependencies needed to run the backend and frontend test suites.
+inputs:
+  backend:
+    description: Install the backend toolchain and dependencies.
+    default: "true"
+  frontend:
+    description: Install the frontend toolchain and dependencies.
+    default: "true"
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+      with:
+        python-version: "3.12"
+        cache: pip
+        cache-dependency-path: backend/requirements.txt
+    - if: inputs.backend == 'true'
+      shell: bash
+      run: python -m pip install --disable-pip-version-check -r backend/requirements.txt
+    - if: inputs.frontend == 'true'
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version: "22"
+        cache: npm
+        cache-dependency-path: frontend/package-lock.json
+    - if: inputs.frontend == 'true'
+      shell: bash
+      working-directory: frontend
+      run: npm ci --no-audit --no-fund
