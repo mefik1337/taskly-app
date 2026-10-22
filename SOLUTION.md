@@ -132,6 +132,15 @@ The final run ([39772879802](https://github.com/mefik1337/taskly-app/actions/run
 - **Commit:** the bot committed `test: add frontend unit tests for #3` and dispatched `CI (frontend)`. The format check, type-check and tests all passed.
 - **Run:** Sonnet, 27 turns, $0.26 API-equivalent, one denied compound command, which the agent rewrote.
 
+**Human review of the agent's tests.** An independent review approved the backend tests and asked for changes to the frontend tests:
+
+- The agent had pasted the new fake route twice.
+- Two assertions checked the fake's own state.
+- A page test could not fail.
+- No test pinned that clearing makes the page busy.
+
+The fixes are separate commits on each branch: `test: tighten the clear completed tests after review` and `test: drop the route test that repeats the repository contract`. The new busy tests were checked by mutation: changing the mutation key makes both fail. The pull requests carry the `skip-test-agent` label afterwards, so the agent does not rewrite reviewed tests. Verification and review stay complementary: the workflow proves the tests run green and cover the change, and the reviewer judges whether they would catch a regression.
+
 ## Assumptions
 
 - Pull request authors are repository collaborators. Fork pull requests are skipped, because running an agent with credentials on untrusted code is out of scope.
