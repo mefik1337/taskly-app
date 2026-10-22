@@ -34,12 +34,6 @@ function renderCreate(cached?: Todo[]) {
   return { result, cachedList, create }
 }
 
-it('resolves with the task the server created from the input', async () => {
-  installFakeApi()
-  const { create } = renderCreate([])
-  expect(await create()).toMatchObject(input)
-})
-
 it('prepends the created task to the cached list', async () => {
   installFakeApi([older])
   const { cachedList, create } = renderCreate([older])

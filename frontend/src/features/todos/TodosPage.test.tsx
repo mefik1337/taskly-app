@@ -1,5 +1,6 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react'
-import { expect, it } from 'vitest'
+import { focusManager } from '@tanstack/react-query'
+import { act, screen, waitFor, within } from '@testing-library/react'
+import { expect, it, onTestFinished } from 'vitest'
 import { installFakeApi } from '../../test/fakeApi'
 import { renderWithProviders } from '../../test/queryWrapper'
 import { todoFixture } from '../../test/todoFixture'
@@ -129,12 +130,16 @@ it('shows the server error and reloads the list on Try again', async () => {
   expect(screen.queryByRole('alert')).not.toBeInTheDocument()
 })
 
-it('keeps the tasks and disables Try again while a refresh on window focus failed and reloads', async () => {
+it('keeps the tasks when a refresh on window focus fails and reloads on Try again', async () => {
   const api = installFakeApi([todoFixture])
   const { user } = renderPage()
   await screen.findByRole('heading', { name: 'Prepare a demo' })
   api.failNext('GET', 503, 'The server is unavailable.')
-  fireEvent(window, new Event('visibilitychange'))
+  onTestFinished(() => focusManager.setFocused(undefined))
+  act(() => {
+    focusManager.setFocused(false)
+    focusManager.setFocused(true)
+  })
   expect(await screen.findByRole('alert')).toHaveTextContent(
     'The server is unavailable.',
   )

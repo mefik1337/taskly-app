@@ -48,13 +48,13 @@ it('patches a task by id sending only writable fields', async () => {
   expect(api.requests[0]).toMatchObject({
     method: 'PATCH',
     url: '/api/todos/7',
-    body: {
-      title: 'Prepare a demo',
-      description: '',
-      priority: 'medium',
-      due_date: null,
-      completed: true,
-    },
+  })
+  expect(api.requests[0].body).toEqual({
+    title: 'Prepare a demo',
+    description: '',
+    priority: 'medium',
+    due_date: null,
+    completed: true,
   })
 })
 
@@ -64,8 +64,8 @@ it('patches only the fields given in a partial update', async () => {
   expect(api.requests[0]).toMatchObject({
     method: 'PATCH',
     url: '/api/todos/3',
-    body: { completed: false },
   })
+  expect(api.requests[0].body).toEqual({ completed: false })
 })
 
 it('deletes a task by id with DELETE and resolves without a body', async () => {

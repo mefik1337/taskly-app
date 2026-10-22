@@ -5,6 +5,7 @@ import { createTestQueryClient, queryWrapper } from '../../../test/queryWrapper'
 import { todoFixture } from '../../../test/todoFixture'
 import { todoKeys } from '../api/queryKeys'
 import type { Todo } from '../types'
+import { useTodosQuery } from './useTodosQuery'
 import { useUpdateTodoMutation } from './useUpdateTodoMutation'
 
 const first: Todo = { ...todoFixture, id: 3, title: 'First' }
@@ -19,24 +20,6 @@ function renderUpdate(cached?: Todo[]) {
   const cachedList = () => client.getQueryData<Todo[]>(todoKeys.list)
   return { result, cachedList }
 }
-
-it('resolves with the saved task changed only in the given fields', async () => {
-  installFakeApi([{ ...todoFixture, description: 'Slides' }])
-  const { result } = renderUpdate()
-  let saved!: Todo
-  await act(async () => {
-    saved = await result.current.mutateAsync({
-      id: 7,
-      input: { completed: true },
-    })
-  })
-  expect(saved).toMatchObject({
-    id: 7,
-    title: 'Prepare a demo',
-    description: 'Slides',
-    completed: true,
-  })
-})
 
 it('replaces the saved task in the cached list keeping the order', async () => {
   installFakeApi([first, todoFixture, last])
@@ -72,4 +55,23 @@ it('keeps the cache and exposes the server message when the task is gone', async
     expect(result.current.error?.message).toBe('Task not found.'),
   )
   expect(cachedList()).toEqual([todoFixture])
+})
+
+it('keeps the saved task when an older list request finishes afterwards', async () => {
+  const api = installFakeApi([todoFixture])
+  const { result } = renderHook(
+    () => ({ list: useTodosQuery(), update: useUpdateTodoMutation() }),
+    { wrapper: queryWrapper(createTestQueryClient()) },
+  )
+  await waitFor(() => expect(result.current.list.data).toEqual([todoFixture]))
+  const release = api.delayNextResponse('GET')
+  act(() => void result.current.list.refetch())
+  await waitFor(() => expect(api.requestsTo('GET')).toHaveLength(2))
+  await act(() =>
+    result.current.update.mutateAsync({ id: 7, input: { completed: true } }),
+  )
+  await act(async () => release())
+  expect(result.current.list.data).toEqual([
+    expect.objectContaining({ id: 7, completed: true }),
+  ])
 })

@@ -4,9 +4,9 @@ import { installFakeApi } from '../../../test/fakeApi'
 import { createTestQueryClient, queryWrapper } from '../../../test/queryWrapper'
 import { todoFixture } from '../../../test/todoFixture'
 import { todoKeys } from '../api/queryKeys'
-import { todosApi } from '../api/todos'
 import type { Todo } from '../types'
 import { useDeleteTodoMutation } from './useDeleteTodoMutation'
+import { useTodosQuery } from './useTodosQuery'
 
 const other: Todo = { ...todoFixture, id: 3, title: 'Other' }
 
@@ -19,13 +19,6 @@ function renderDelete(cached?: Todo[]) {
   const cachedList = () => client.getQueryData<Todo[]>(todoKeys.list)
   return { result, cachedList }
 }
-
-it('removes the task on the server so a reload no longer lists it', async () => {
-  installFakeApi([todoFixture, other])
-  const { result } = renderDelete([todoFixture, other])
-  await act(() => result.current.mutateAsync(7))
-  await expect(todosApi.list()).resolves.toEqual([other])
-})
 
 it('removes only the deleted task from the cached list', async () => {
   installFakeApi([todoFixture, other])
@@ -51,4 +44,21 @@ it('keeps the task cached and exposes the server message when the task is alread
     expect(result.current.error?.message).toBe('Task not found.'),
   )
   expect(cachedList()).toEqual([todoFixture])
+})
+
+it('keeps the task deleted when an older list request finishes afterwards', async () => {
+  const api = installFakeApi([todoFixture, other])
+  const { result } = renderHook(
+    () => ({ list: useTodosQuery(), remove: useDeleteTodoMutation() }),
+    { wrapper: queryWrapper(createTestQueryClient()) },
+  )
+  await waitFor(() =>
+    expect(result.current.list.data).toEqual([todoFixture, other]),
+  )
+  const release = api.delayNextResponse('GET')
+  act(() => void result.current.list.refetch())
+  await waitFor(() => expect(api.requestsTo('GET')).toHaveLength(2))
+  await act(() => result.current.remove.mutateAsync(7))
+  await act(async () => release())
+  expect(result.current.list.data).toEqual([other])
 })

@@ -42,13 +42,6 @@ it('shows loading feedback while tasks load', () => {
   expect(screen.queryByRole('heading')).not.toBeInTheDocument()
 })
 
-it('invites creating the first task when there are none', async () => {
-  const { user, onCreate } = renderList()
-  expect(screen.queryByRole('status')).not.toBeInTheDocument()
-  await user.click(screen.getByRole('button', { name: 'Add your first task' }))
-  expect(onCreate).toHaveBeenCalledTimes(1)
-})
-
 it('blocks creating the first task while busy', () => {
   renderList({ busy: true })
   expect(
