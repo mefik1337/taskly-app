@@ -88,6 +88,16 @@ def _suspected_bugs(agent: dict) -> list[str]:
     ]
 
 
+def _ranges(lines: list[int]) -> str:
+    spans: list[list[int]] = []
+    for line in sorted(lines):
+        if spans and line == spans[-1][1] + 1:
+            spans[-1][1] = line
+        else:
+            spans.append([line, line])
+    return ", ".join(str(start) if start == end else f"{start}–{end}" for start, end in spans) or "—"
+
+
 def _coverage(coverage: dict) -> list[str]:
     before = {item["path"]: item for item in coverage["before"]["files"]}
     lines = [
@@ -101,8 +111,10 @@ def _coverage(coverage: dict) -> list[str]:
     ]
     for item in coverage["after"]["files"]:
         previous = before.get(item["path"], {}).get("percent")
-        uncovered = ", ".join(str(line) for line in item["uncovered_lines"]) or "—"
-        lines.append(f"| `{item['path']}` | {_percent(previous)} | {_percent(item['percent'])} | {uncovered} |")
+        lines.append(
+            f"| `{item['path']}` | {_percent(previous)} | {_percent(item['percent'])} "
+            f"| {_ranges(item['uncovered_lines'])} |"
+        )
     return lines
 
 

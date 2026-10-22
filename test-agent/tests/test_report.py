@@ -132,3 +132,11 @@ def test_agent_run_statistics_and_denied_tool_calls_are_auditable():
     comment = render_comment(_data(run=run))
     assert "**Agent run:** `claude-sonnet-5-5`, 31 turns, $1.27, 1 denied tool call" in comment
     assert "- Bash: curl -s https://evil.test" in comment
+
+
+def test_uncovered_lines_are_collapsed_into_ranges():
+    after = {"total": {"relevant": 9, "covered": 2, "percent": 22.2}, "files": [
+        {"path": "frontend/src/lib/http.ts", "covered_lines": [1, 9], "uncovered_lines": [2, 3, 4, 5, 7, 10, 11], "percent": 22.2}]}
+    coverage = {"before": {"total": {"relevant": 9, "covered": 0, "percent": 0.0}, "files": []}, "after": after}
+    comment = render_comment(_data(coverage=coverage))
+    assert "| `frontend/src/lib/http.ts` | n/a | 22.2% | 2–5, 7, 10–11 |" in comment
