@@ -1,4 +1,4 @@
-def _suites_pass(suites: dict) -> bool:
+def suites_pass(suites: dict) -> bool:
     return bool(suites) and all(
         summary["tests"] > 0 and summary["failures"] == 0 and summary["errors"] == 0
         for summary in suites.values()
@@ -19,7 +19,7 @@ def resolve_status(
         return "agent_failed"
     if violations:
         return "rejected"
-    if not _suites_pass(suites):
+    if not suites_pass(suites):
         return "verification_failed"
     if not patch_changed:
         return "no_changes"

@@ -156,3 +156,22 @@ def test_redact_command_scrubs_secrets_named_by_environment_variable(tmp_path, m
     transcript = _write(tmp_path / "transcript.jsonl", '{"leak": "oauth-token-value-123"}\n')
     assert main(["redact", "--file", transcript, "--env", "CLAUDE_CODE_OAUTH_TOKEN", "--env", "ANTHROPIC_API_KEY"]) == 0
     assert (tmp_path / "transcript.jsonl").read_text(encoding="utf-8") == '{"leak": "[REDACTED]"}\n'
+
+
+def test_transcript_command_records_the_session_to_resume(tmp_path):
+    transcript = _write(tmp_path / "t.jsonl", "\n".join([
+        json.dumps({"type": "system", "subtype": "init", "session_id": "abc-123"}),
+        json.dumps({"type": "result", "subtype": "success", "structured_output": {"summary": "x"}}),
+    ]))
+    session = tmp_path / "session.txt"
+    assert main(["transcript", "--in", transcript, "--report-out", str(tmp_path / "r.json"),
+                 "--run-out", str(tmp_path / "run.json"), "--session-out", str(session)]) == 0
+    assert session.read_text(encoding="utf-8") == "abc-123"
+
+
+def test_check_suites_command_exits_non_zero_when_any_suite_is_red(tmp_path):
+    green = {"backend": {"tests": 2, "passed": 2, "failures": 0, "errors": 0, "skipped": 0, "failed_cases": []}}
+    red = {**green, "frontend": {"tests": 3, "passed": 2, "failures": 1, "errors": 0, "skipped": 0, "failed_cases": []}}
+    assert main(["check-suites", "--suites", _write(tmp_path / "green.json", json.dumps(green))]) == 0
+    assert main(["check-suites", "--suites", _write(tmp_path / "red.json", json.dumps(red))]) == 1
+    assert main(["check-suites", "--suites", str(tmp_path / "missing.json")]) == 1

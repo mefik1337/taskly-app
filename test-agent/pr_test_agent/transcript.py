@@ -30,7 +30,8 @@ def _describe_denial(denial: dict) -> str:
 def summarize_transcript(lines: Iterable[str]) -> dict:
     events = _events(lines)
     init = next((event for event in events if event.get("type") == "system" and event.get("subtype") == "init"), {})
-    result = next((event for event in reversed(events) if event.get("type") == "result"), None)
+    results = [event for event in events if event.get("type") == "result"]
+    result = results[-1] if results else None
     skills: list[str] = []
     for event in events:
         for tool_use in _tool_uses(event):
@@ -44,11 +45,15 @@ def summarize_transcript(lines: Iterable[str]) -> dict:
         report = None
     return {
         "report": report,
+        "session_id": init.get("session_id"),
         "run": {
             "model": init.get("model"),
             "outcome": result.get("subtype", "unknown") if result else "no_result",
-            "turns": (result or {}).get("num_turns"),
-            "cost_usd": round((result or {}).get("total_cost_usd") or 0, 2),
-            "denied_tool_calls": [_describe_denial(denial) for denial in (result or {}).get("permission_denials") or []],
+            "passes": len(results),
+            "turns": sum(item.get("num_turns") or 0 for item in results) if results else None,
+            "cost_usd": round(sum(item.get("total_cost_usd") or 0 for item in results), 2),
+            "denied_tool_calls": [
+                _describe_denial(denial) for item in results for denial in item.get("permission_denials") or []
+            ],
         },
     }

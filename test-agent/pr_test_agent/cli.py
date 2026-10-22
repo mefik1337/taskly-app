@@ -9,7 +9,7 @@ from .diff import parse_unified_diff
 from .guard import find_violations
 from .junit import summarize_junit
 from .manifest import build_manifest, snapshot_changes
-from .outcome import resolve_status
+from .outcome import resolve_status, suites_pass
 from .paths import classify_path
 from .redact import redact
 from .report import render_comment
@@ -114,7 +114,13 @@ def _transcript(args) -> int:
     if summary["report"] is not None:
         _write_json(args.report_out, summary["report"])
     _write_json(args.run_out, summary["run"])
+    if args.session_out and summary["session_id"]:
+        Path(args.session_out).write_text(summary["session_id"], encoding="utf-8")
     return 0
+
+
+def _check_suites(args) -> int:
+    return 0 if suites_pass(_read_json(args.suites, {})) else 1
 
 
 def _redact(args) -> int:
@@ -153,6 +159,10 @@ def _parser() -> argparse.ArgumentParser:
     junit.add_argument("--out", required=True)
     junit.set_defaults(handler=_junit)
 
+    check = commands.add_parser("check-suites")
+    check.add_argument("--suites", required=True)
+    check.set_defaults(handler=_check_suites)
+
     redaction = commands.add_parser("redact")
     redaction.add_argument("--file", required=True)
     redaction.add_argument("--env", action="append", required=True)
@@ -162,6 +172,7 @@ def _parser() -> argparse.ArgumentParser:
     transcript.add_argument("--in", dest="input", required=True)
     transcript.add_argument("--report-out", required=True)
     transcript.add_argument("--run-out", required=True)
+    transcript.add_argument("--session-out")
     transcript.set_defaults(handler=_transcript)
 
     for name, handler in (("status", _status), ("render", _render)):
