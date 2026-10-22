@@ -294,9 +294,11 @@ it('keeps the page locked while completed tasks are being cleared', async () => 
   await user.click(
     await screen.findByRole('button', { name: 'Clear completed (1)' }),
   )
-  expect(
-    screen.getByRole('button', { name: 'Clear completed (1)' }),
-  ).toBeDisabled()
+  await waitFor(() =>
+    expect(
+      screen.getByRole('button', { name: 'Clear completed (1)' }),
+    ).toBeDisabled(),
+  )
   expect(screen.getByRole('button', { name: 'New task' })).toBeDisabled()
   release()
   expect(await screen.findByRole('status')).toHaveTextContent(
