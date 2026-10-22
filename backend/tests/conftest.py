@@ -20,7 +20,6 @@ def repository_mock():
 
 @pytest.fixture
 def client(repository_mock):
-    # Mount just this router: factory, lifespan and health remain untested.
     app = FastAPI()
     app.include_router(router)
     app.dependency_overrides[get_repository] = lambda: repository_mock
