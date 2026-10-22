@@ -16,6 +16,8 @@ A test is finished when it is **green twice in a row**, covers the lines it was 
 
 Paths are repository-relative (`backend/tests/core/test_config.py`, `frontend/src/lib/http.test.ts`). With no arguments a runner executes the full suite of its stack.
 
+Call a runner as **one plain command**: the runner path, then literal file paths. The sandbox refuses `cd`, `;`, `&&`, pipes, redirects and variables; a refused compound command means rewrite it as a plain one, never that the runner is unavailable. Read files with the Read tool, not with `cat` or `sed`.
+
 ## Loop
 
 1. Run your stack's runner with the test files you touched.
