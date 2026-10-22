@@ -21,11 +21,11 @@ def pooled_engine(tmp_path):
 def app_client(pooled_engine, serve_engine):
     serve_engine(pooled_engine)
     app = create_app("sqlite://")
-    held_sessions = []
+    sessions_kept_from_garbage_collection = []
 
     @app.post("/api/failing-write")
     def failing_write(repo: Repository):
-        held_sessions.append(repo.session)
+        sessions_kept_from_garbage_collection.append(repo.session)
         now = datetime.now(timezone.utc)
         repo.session.add(TodoRecord(title="Half written", created_at=now, updated_at=now))
         repo.session.flush()
@@ -33,7 +33,7 @@ def app_client(pooled_engine, serve_engine):
 
     @app.post("/api/held-write", status_code=201)
     def held_write(repo: Repository):
-        held_sessions.append(repo.session)
+        sessions_kept_from_garbage_collection.append(repo.session)
         return repo.create(TodoCreate(title="Task"))
 
     with TestClient(app, raise_server_exceptions=False) as client:
