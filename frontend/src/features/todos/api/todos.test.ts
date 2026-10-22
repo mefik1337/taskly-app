@@ -79,3 +79,16 @@ it('deletes a task by id with DELETE and resolves without a body', async () => {
   })
   await expect(todosApi.list()).resolves.toEqual([other])
 })
+
+it('clears completed tasks with DELETE /api/todos/completed and reports the count', async () => {
+  const active = { ...todoFixture, id: 3, title: 'Other' }
+  const done = { ...todoFixture, id: 4, completed: true }
+  const api = installFakeApi([active, done])
+  await expect(todosApi.clearCompleted()).resolves.toEqual({ deleted: 1 })
+  expect(api.requests[0]).toMatchObject({
+    method: 'DELETE',
+    url: '/api/todos/completed',
+    body: undefined,
+  })
+  await expect(todosApi.list()).resolves.toEqual([active])
+})

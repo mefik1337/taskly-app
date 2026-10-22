@@ -253,3 +253,57 @@ it('keeps the task when deletion is cancelled', async () => {
   expect(screen.queryByRole('status')).not.toBeInTheDocument()
   expect(api.requestsTo('DELETE')).toEqual([])
 })
+
+it('clears completed tasks and reports how many were removed', async () => {
+  installFakeApi([todoFixture, groceries])
+  const { user } = renderPage()
+  await user.click(
+    await screen.findByRole('button', { name: 'Clear completed (1)' }),
+  )
+  expect(await screen.findByRole('status')).toHaveTextContent(
+    'Removed 1 completed task.',
+  )
+  expect(taskTitles()).toEqual(['Prepare a demo'])
+  expect(
+    screen.queryByRole('button', { name: /Clear completed/ }),
+  ).not.toBeInTheDocument()
+})
+
+it('shows the server error when clearing completed tasks fails and dismisses it on Try again', async () => {
+  const api = installFakeApi([groceries])
+  const { user } = renderPage()
+  const clear = await screen.findByRole('button', {
+    name: 'Clear completed (1)',
+  })
+  api.failNext('DELETE', 500, 'Could not clear tasks.')
+  await user.click(clear)
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    'Could not clear tasks.',
+  )
+  expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  await user.click(screen.getByRole('button', { name: 'Try again' }))
+  await waitFor(() =>
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument(),
+  )
+})
+
+it('disables Clear completed while another save is in flight', async () => {
+  const api = installFakeApi([todoFixture, groceries])
+  const release = api.delayNextResponse('PATCH')
+  const { user } = renderPage()
+  await user.click(
+    await screen.findByRole('checkbox', { name: 'Complete: Prepare a demo' }),
+  )
+  await waitFor(() =>
+    expect(
+      screen.getByRole('button', { name: /Clear completed/ }),
+    ).toBeDisabled(),
+  )
+  release()
+  await waitFor(() =>
+    expect(
+      screen.getByRole('button', { name: 'Clear completed (2)' }),
+    ).toBeEnabled(),
+  )
+  expect(api.requestsTo('DELETE')).toEqual([])
+})
