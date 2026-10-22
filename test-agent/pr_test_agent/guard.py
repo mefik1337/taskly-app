@@ -1,33 +1,46 @@
 from pathlib import PurePosixPath
 
-from .diff import FileChange
-from .paths import classify_path
+from unidiff import PatchedFile, PatchSet, UnidiffParseError
+
+from .stacks import Stack
 
 DEFAULT_MAX_FILES = 25
 
 
-def _is_safe(path: str) -> bool:
+def _strip_prefix(path: str) -> str:
+    return path[2:] if path.startswith(("a/", "b/")) else path
+
+
+def _inside_repository(path: str) -> bool:
     posix = PurePosixPath(path)
     return not posix.is_absolute() and ".." not in posix.parts
 
 
-def _is_test(path: str) -> bool:
-    return classify_path(path).kind == "test"
-
-
-def _violation(change: FileChange) -> str | None:
-    if not _is_safe(change.path) or (change.previous_path and not _is_safe(change.previous_path)):
-        return f"{change.path}: path must stay inside the repository"
-    if not _is_test(change.path):
-        return f"{change.path}: only test files may be changed"
-    if change.status == "deleted":
-        return f"{change.path}: deleting tests is not allowed"
-    if change.previous_path and not _is_test(change.previous_path):
-        return f"{change.path}: renamed from {change.previous_path}, which is not a test file"
+def _violation(stack: Stack, change: PatchedFile) -> str | None:
+    path = change.path
+    source = _strip_prefix(change.source_file)
+    if not _inside_repository(path) or (change.is_rename and not _inside_repository(source)):
+        return f"{path}: path must stay inside the repository"
+    if not stack.owns_test(path):
+        return f"{path}: only {stack.name} test files may be changed"
+    if change.is_removed_file:
+        return f"{path}: deleting files is not allowed"
+    if change.is_rename and not stack.owns_test(source):
+        return f"{path}: renamed from {source}, which is not a {stack.name} test file"
+    if change.is_symlink:
+        return f"{path}: symbolic links are not allowed"
     return None
 
 
-def find_violations(changes: list[FileChange], max_files: int = DEFAULT_MAX_FILES) -> list[str]:
+def find_violations(stack: Stack, patch: str, max_files: int = DEFAULT_MAX_FILES) -> list[str]:
+    try:
+        changes = PatchSet(patch)
+    except UnidiffParseError as error:
+        return [f"the patch cannot be parsed: {error}"]
     if len(changes) > max_files:
-        return [f"agent changed {len(changes)} files, the limit is {max_files}"]
-    return [violation for change in changes if (violation := _violation(change))]
+        return [f"the patch changes {len(changes)} files, the limit is {max_files}"]
+    return [violation for change in changes if (violation := _violation(stack, change))]
+
+
+def touched_test_files(patch: str) -> list[str]:
+    return [change.path for change in PatchSet(patch) if not change.is_removed_file]

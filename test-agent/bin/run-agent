@@ -2,96 +2,87 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: run-agent --mode pr|backfill --manifest FILE --coverage FILE [--base SHA] [--out DIR]" >&2
-  echo "       run-agent --mode repair --failures FILE [--out DIR]" >&2
+  echo "usage: run-agent --stack backend|frontend --mode run|repair [--workspace DIR]" >&2
   exit 2
 }
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-mode="" manifest="" coverage="" base="" failures="" out_dir=".test-agent"
+stack="" mode="" workspace=""
 while (( $# )); do
   case "$1" in
+    --stack) stack="${2:-}"; shift 2 ;;
     --mode) mode="${2:-}"; shift 2 ;;
-    --manifest) manifest="${2:-}"; shift 2 ;;
-    --coverage) coverage="${2:-}"; shift 2 ;;
-    --base) base="${2:-}"; shift 2 ;;
-    --failures) failures="${2:-}"; shift 2 ;;
-    --out) out_dir="${2:-}"; shift 2 ;;
+    --workspace) workspace="${2:-}"; shift 2 ;;
     *) usage ;;
   esac
 done
+[[ "$stack" == "backend" || "$stack" == "frontend" ]] || usage
+workspace="${workspace:-.test-agent/$stack}"
+[[ "$workspace" =~ ^[A-Za-z0-9._/-]+$ && "$workspace" != /* && "$workspace" != *..* ]] \
+  || { echo "run-agent: the workspace must be a repository-relative directory" >&2; exit 2; }
 
-require_input() {
-  [[ "$1" =~ ^[A-Za-z0-9._/-]+$ && "$1" != /* && "$1" != *..* && -f "$repo_root/$1" ]] \
-    || { echo "run-agent: inputs must be existing repository-relative files: $1" >&2; exit 2; }
-}
+if [[ -n "${TEST_AGENT_PYTHON:-}" ]]; then
+  python_bin="$TEST_AGENT_PYTHON"
+elif [[ -x "$repo_root/test-agent/.venv/bin/python" ]]; then
+  python_bin="$repo_root/test-agent/.venv/bin/python"
+elif [[ -x "$repo_root/test-agent/.venv/Scripts/python.exe" ]]; then
+  python_bin="$repo_root/test-agent/.venv/Scripts/python.exe"
+else
+  python_bin="python3"
+fi
+tool() { "$python_bin" "$repo_root/test-agent/main.py" "$@"; }
 
 cd "$repo_root"
-mkdir -p "$out_dir"
+[[ -f "$workspace/analysis.json" ]] || { echo "run-agent: run the analyze command first; $workspace/analysis.json is missing" >&2; exit 2; }
 
 case "$mode" in
-  pr | backfill)
-    [[ "$mode" == "backfill" || "$base" =~ ^[0-9a-f]{40}$ ]] || { echo "run-agent: --base must be a full commit SHA in pr mode" >&2; exit 2; }
-    require_input "$manifest"
-    require_input "$coverage"
-    if [[ "$mode" == "pr" ]]; then
-      base_line="Base commit: $base"
-    else
-      base_line="Base commit: none. Backfill mode: every line of every target counts as changed."
-    fi
-    prompt="Mode: $mode
-Manifest: $manifest
-Coverage before your work: $coverage
-$base_line
+  run)
+    prompt="Stack: $stack
+Analysis: $workspace/analysis.json
 
 Work through your workflow and finish with the report."
     session_args=()
-    : > "$out_dir/transcript.jsonl"
+    : > "$workspace/transcript.jsonl"
     ;;
   repair)
-    require_input "$failures"
-    session="$(cat "$out_dir/session.txt" 2>/dev/null || true)"
+    session="$(cat "$workspace/session.txt" 2>/dev/null || true)"
     [[ "$session" =~ ^[0-9a-f-]{36}$ ]] || { echo "run-agent: no previous session to repair" >&2; exit 2; }
-    prompt="Mode: repair
-Failing suites: $failures
+    [[ -f "$workspace/selfcheck.json" ]] || { echo "run-agent: run the selfcheck command first" >&2; exit 2; }
+    prompt="Stack: $stack
+Mode: repair
+Failing suite: $workspace/selfcheck.json
 
-The full test suites fail after your changes. Open that file, fix every failing test with the test-verification skill, run the full suite of every stack you touched until it is green, then return the report for the whole run."
+The full $stack suite fails after your changes. Open that file, fix every failing test with the test-verification skill, run the full suite until it is green, then return the report for the whole run."
     session_args=(--resume "$session")
     ;;
   *) usage ;;
 esac
 
-model="${TEST_AGENT_MODEL:-claude-sonnet-5-5}"
-max_turns="${TEST_AGENT_MAX_TURNS:-80}"
-max_budget="${TEST_AGENT_MAX_BUDGET_USD:-5}"
-python_bin="${PYTHON:-python3}"
+settings="$(mktemp)"
+trap 'rm -f "$settings"' EXIT
+tool claude-settings --stack "$stack" > "$settings"
 
 set +e
 claude -p "$prompt" \
   "${session_args[@]}" \
   --agent test-engineer \
-  --model "$model" \
+  --model "${TEST_AGENT_MODEL:-claude-sonnet-5-5}" \
   --setting-sources project \
-  --settings test-agent/claude-settings.json \
+  --settings "$settings" \
   --strict-mcp-config \
   --permission-mode dontAsk \
   --tools "Read,Edit,Write,Glob,Grep,Bash,Skill" \
   --disallowedTools "WebFetch,WebSearch" \
-  --max-turns "$max_turns" \
-  --max-budget-usd "$max_budget" \
-  --json-schema "$(cat test-agent/report.schema.json)" \
+  --max-turns "${TEST_AGENT_MAX_TURNS:-80}" \
+  --max-budget-usd "${TEST_AGENT_MAX_BUDGET_USD:-5}" \
+  --json-schema "$(tool schema)" \
   --output-format stream-json --verbose \
-  < /dev/null >> "$out_dir/transcript.jsonl"
+  < /dev/null >> "$workspace/transcript.jsonl"
 claude_status=$?
 set -e
 
-"$python_bin" test-agent/main.py redact --file "$out_dir/transcript.jsonl" \
+tool redact --file "$workspace/transcript.jsonl" \
   --env ANTHROPIC_API_KEY --env CLAUDE_CODE_OAUTH_TOKEN --env ANTHROPIC_AUTH_TOKEN
-rm -f "$out_dir/agent-report.json"
-"$python_bin" test-agent/main.py transcript \
-  --in "$out_dir/transcript.jsonl" \
-  --report-out "$out_dir/agent-report.json" \
-  --run-out "$out_dir/agent-run.json" \
-  --session-out "$out_dir/session.txt"
+tool transcript --workspace "$workspace"
 echo "run-agent: claude exited with $claude_status"
-cat "$out_dir/agent-run.json"
+cat "$workspace/agent-run.json"

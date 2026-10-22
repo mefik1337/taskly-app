@@ -2,128 +2,86 @@ import argparse
 import json
 import os
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
-from .coverage import LineCoverage, diff_coverage, parse_lcov
-from .diff import parse_unified_diff
+from .comment import CommentContext, render_comment
 from .guard import find_violations
-from .junit import summarize_junit
-from .manifest import build_manifest, snapshot_changes
-from .outcome import resolve_status, suites_pass
-from .paths import classify_path
+from .models import AgentReport, AgentRun, Analysis, Verification
+from .outcome import resolve_status
+from .pipeline import Runner, analyze, script_runner, selfcheck, verify
 from .redact import redact
-from .report import render_comment
+from .settings import claude_settings
+from .stacks import STACKS, get_stack
 from .transcript import summarize_transcript
+from .workspace import Workspace
+
+RunnerFactory = Callable[[Path], Runner]
 
 
-def _read_text(path: str | None) -> str | None:
-    if not path or not Path(path).is_file():
-        return None
-    return Path(path).read_text(encoding="utf-8")
-
-
-def _read_json(path: str | None, default=None):
-    text = _read_text(path)
-    return json.loads(text) if text and text.strip() else default
-
-
-def _write_json(path: str, data) -> None:
-    Path(path).write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-
-
-def _pairs(values: list[str] | None) -> list[tuple[str, str]]:
-    return [tuple(value.split("=", 1)) for value in values or []]
-
-
-def _manifest(args) -> int:
-    if args.all:
-        changes = snapshot_changes(Path.cwd())
-    else:
-        changes = parse_unified_diff(_read_text(args.diff) or "")
-    if args.area:
-        changes = [change for change in changes if classify_path(change.path).area == args.area]
-    _write_json(args.out, build_manifest(changes, exists=os.path.isfile))
+def _analyze(args, repo: Path, runner_factory: RunnerFactory) -> int:
+    analysis = analyze(repo, get_stack(args.stack), Workspace(args.workspace), args.base, runner_factory(repo))
+    print(json.dumps({"targets": [file.path for file in analysis.targets], "suite_green": analysis.suite.green}))
     return 0
 
 
-def _guard(args) -> int:
-    violations = find_violations(parse_unified_diff(_read_text(args.diff) or ""))
-    _write_json(args.out, violations)
+def _selfcheck(args, repo: Path, runner_factory: RunnerFactory) -> int:
+    suite = selfcheck(repo, get_stack(args.stack), Workspace(args.workspace), runner_factory(repo))
+    return 0 if suite.green else 1
+
+
+def _verify(args, repo: Path, runner_factory: RunnerFactory) -> int:
+    verify(repo, get_stack(args.stack), Workspace(args.workspace), runner_factory(repo))
+    return 0
+
+
+def _guard(args, *_) -> int:
+    workspace = Workspace(args.workspace)
+    violations = find_violations(get_stack(args.stack), workspace.text(workspace.patch_path))
     for violation in violations:
         print(violation, file=sys.stderr)
     return 1 if violations else 0
 
 
-def _diff_coverage(args) -> int:
-    coverage: dict[str, LineCoverage] = {}
-    for area, path in _pairs(args.lcov):
-        text = _read_text(path)
-        if text is not None:
-            coverage.update(parse_lcov(text, prefix=area))
-    _write_json(args.out, diff_coverage(_read_json(args.manifest), coverage))
+def _status(args, *_) -> int:
+    workspace = Workspace(args.workspace)
+    analysis = workspace.read(Analysis)
+    if analysis is None:
+        print("not_measured")
+        return 0
+    print(resolve_status(analysis, workspace.read(AgentReport), workspace.read(Verification)))
     return 0
 
 
-def _missing_report(suite: str) -> dict:
-    return {
-        "tests": 0, "passed": 0, "failures": 0, "errors": 1, "skipped": 0,
-        "failed_cases": [{"name": suite, "message": "No test report was produced; the runner failed before running tests."}],
-    }
-
-
-def _junit(args) -> int:
-    suites = {}
-    for suite, path in _pairs(args.report):
-        text = _read_text(path)
-        suites[suite] = summarize_junit(text) if text is not None else _missing_report(suite)
-    _write_json(args.out, suites)
-    return 0
-
-
-def _status(args) -> int:
-    print(resolve_status(
-        has_targets=bool(_read_json(args.manifest, {}).get("targets")),
-        agent_report=_read_json(args.agent_report),
-        violations=_read_json(args.violations, []),
-        suites=_read_json(args.suites, {}),
-        patch_changed=bool((_read_text(args.patch) or "").strip()),
+def _comment(args, *_) -> int:
+    workspace = Workspace(args.workspace)
+    comment = render_comment(CommentContext(
+        stack=args.stack,
+        status=args.status,
+        run_url=args.run_url,
+        commit_sha=args.commit_sha or None,
+        analysis=workspace.read(Analysis),
+        report=workspace.read(AgentReport),
+        verification=workspace.read(Verification),
+        run=workspace.read(AgentRun),
     ))
-    return 0
-
-
-def _render(args) -> int:
-    before = _read_json(args.coverage_before)
-    after = _read_json(args.coverage_after)
-    suites = _read_json(args.suites)
-    violations = _read_json(args.violations, [])
-    comment = render_comment({
-        "status": args.status,
-        "agent": _read_json(args.agent_report),
-        "verification": {"violations": violations, "suites": suites or {}} if suites is not None or violations else None,
-        "coverage": {"before": before, "after": after or before} if before else None,
-        "run_url": args.run_url,
-        "commit_sha": args.commit_sha,
-        "run": _read_json(args.agent_run),
-    })
     Path(args.out).write_text(comment, encoding="utf-8")
     return 0
 
 
-def _transcript(args) -> int:
-    summary = summarize_transcript((_read_text(args.input) or "").splitlines())
-    if summary["report"] is not None:
-        _write_json(args.report_out, summary["report"])
-    _write_json(args.run_out, summary["run"])
-    if args.session_out and summary["session_id"]:
-        Path(args.session_out).write_text(summary["session_id"], encoding="utf-8")
+def _transcript(args, *_) -> int:
+    workspace = Workspace(args.workspace)
+    summary = summarize_transcript(workspace.text(workspace.transcript_path).splitlines())
+    (workspace.root / "agent-report.json").unlink(missing_ok=True)
+    if summary.report is not None:
+        workspace.write(summary.report)
+    workspace.write(summary.run)
+    if summary.session_id:
+        workspace.session_path.write_text(summary.session_id, encoding="utf-8")
     return 0
 
 
-def _check_suites(args) -> int:
-    return 0 if suites_pass(_read_json(args.suites, {})) else 1
-
-
-def _redact(args) -> int:
+def _redact(args, *_) -> int:
     path = Path(args.file)
     if path.is_file():
         secrets = [os.environ.get(name) for name in args.env]
@@ -131,69 +89,51 @@ def _redact(args) -> int:
     return 0
 
 
+def _schema(*_) -> int:
+    print(json.dumps(AgentReport.model_json_schema()))
+    return 0
+
+
+def _settings(args, *_) -> int:
+    print(json.dumps(claude_settings(get_stack(args.stack)), indent=2))
+    return 0
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="pr_test_agent")
     commands = parser.add_subparsers(dest="command", required=True)
 
-    manifest = commands.add_parser("manifest")
-    source = manifest.add_mutually_exclusive_group(required=True)
-    source.add_argument("--diff")
-    source.add_argument("--all", action="store_true")
-    manifest.add_argument("--area", choices=["backend", "frontend"])
-    manifest.add_argument("--out", required=True)
-    manifest.set_defaults(handler=_manifest)
+    def command(name: str, handler, *, stack: bool = False, workspace: bool = False) -> argparse.ArgumentParser:
+        sub = commands.add_parser(name)
+        sub.set_defaults(handler=handler)
+        if stack:
+            sub.add_argument("--stack", required=True, choices=sorted(STACKS))
+        if workspace:
+            sub.add_argument("--workspace", required=True)
+        return sub
 
-    guard = commands.add_parser("guard")
-    guard.add_argument("--diff", required=True)
-    guard.add_argument("--out", required=True)
-    guard.set_defaults(handler=_guard)
-
-    coverage = commands.add_parser("diff-coverage")
-    coverage.add_argument("--manifest", required=True)
-    coverage.add_argument("--lcov", action="append")
-    coverage.add_argument("--out", required=True)
-    coverage.set_defaults(handler=_diff_coverage)
-
-    junit = commands.add_parser("junit")
-    junit.add_argument("--report", action="append")
-    junit.add_argument("--out", required=True)
-    junit.set_defaults(handler=_junit)
-
-    check = commands.add_parser("check-suites")
-    check.add_argument("--suites", required=True)
-    check.set_defaults(handler=_check_suites)
-
-    redaction = commands.add_parser("redact")
+    analysis = command("analyze", _analyze, stack=True, workspace=True)
+    source = analysis.add_mutually_exclusive_group(required=True)
+    source.add_argument("--base")
+    source.add_argument("--all", dest="base", action="store_const", const=None)
+    command("selfcheck", _selfcheck, stack=True, workspace=True)
+    command("verify", _verify, stack=True, workspace=True)
+    command("guard", _guard, stack=True, workspace=True)
+    command("status", _status, workspace=True)
+    comment = command("comment", _comment, stack=True, workspace=True)
+    comment.add_argument("--status", required=True)
+    comment.add_argument("--run-url", required=True)
+    comment.add_argument("--commit-sha")
+    comment.add_argument("--out", required=True)
+    command("transcript", _transcript, workspace=True)
+    redaction = command("redact", _redact)
     redaction.add_argument("--file", required=True)
     redaction.add_argument("--env", action="append", required=True)
-    redaction.set_defaults(handler=_redact)
-
-    transcript = commands.add_parser("transcript")
-    transcript.add_argument("--in", dest="input", required=True)
-    transcript.add_argument("--report-out", required=True)
-    transcript.add_argument("--run-out", required=True)
-    transcript.add_argument("--session-out")
-    transcript.set_defaults(handler=_transcript)
-
-    for name, handler in (("status", _status), ("render", _render)):
-        command = commands.add_parser(name)
-        command.add_argument("--manifest")
-        command.add_argument("--agent-report")
-        command.add_argument("--violations")
-        command.add_argument("--suites")
-        command.add_argument("--patch")
-        command.set_defaults(handler=handler)
-        if name == "render":
-            command.add_argument("--status", required=True)
-            command.add_argument("--coverage-before")
-            command.add_argument("--coverage-after")
-            command.add_argument("--commit-sha")
-            command.add_argument("--agent-run")
-            command.add_argument("--run-url", required=True)
-            command.add_argument("--out", required=True)
+    command("schema", _schema)
+    command("claude-settings", _settings, stack=True)
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, repo: Path | None = None, runner_factory: RunnerFactory | None = None) -> int:
     args = _parser().parse_args(argv)
-    return args.handler(args)
+    return args.handler(args, repo or Path.cwd(), runner_factory or script_runner)

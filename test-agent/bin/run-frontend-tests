@@ -27,5 +27,5 @@ if (( ${#targets[@]} )); then
 fi
 npx --no-install tsc --noEmit
 exec npx --no-install vitest run --coverage --coverage.reportOnFailure=true \
-  --reporter=default --reporter=junit --outputFile.junit="$out_dir/frontend-junit.xml" \
+  --reporter=default --reporter=junit --outputFile.junit="$out_dir/junit.xml" \
   "${targets[@]}"

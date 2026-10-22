@@ -1,60 +1,78 @@
-from pr_test_agent.coverage import LineCoverage, diff_coverage, parse_lcov
+import subprocess
+from pathlib import Path
 
-LCOV = r"""TN:
-SF:app\api\dependencies.py
-DA:1,1
-DA:11,0
-DA:12,3
-end_of_record
-SF:app/core/config.py
-DA:5,0
-end_of_record
-"""
+from pr_test_agent.coverage import changed_line_coverage, total_percent
+from pr_test_agent.models import FileCoverage
 
 
-def test_lcov_records_are_keyed_by_repository_path_with_hit_and_missed_lines():
-    coverage = parse_lcov(LCOV, prefix="backend")
-    assert coverage == {
-        "backend/app/api/dependencies.py": LineCoverage(executable={1, 11, 12}, covered={1, 12}),
-        "backend/app/core/config.py": LineCoverage(executable={5}, covered=set()),
-    }
+def cobertura(source: Path, filename: str, hits: dict[int, int]) -> str:
+    lines = "".join(f'<line number="{number}" hits="{count}"/>' for number, count in hits.items())
+    return (
+        '<?xml version="1.0" ?><coverage version="7"><sources>'
+        f"<source>{source}</source></sources><packages><package name=\"app\"><classes>"
+        f'<class name="{filename}" filename="{filename}"><methods/><lines>{lines}</lines></class>'
+        "</classes></package></packages></coverage>"
+    )
 
 
-def _manifest(*files):
-    return {"targets": [path for path, _ in files], "files": [
-        {"path": path, "changed_lines": lines, "target": True} for path, lines in files
-    ]}
+def added_lines_diff(path: str, numbers: list[int], total: int) -> str:
+    body = "".join(f"+line {number}\n" if number in numbers else f" line {number}\n" for number in range(1, total + 1))
+    old = total - len(numbers)
+    return (
+        f"diff --git a/{path} b/{path}\nindex 1111111..2222222 100644\n--- a/{path}\n+++ b/{path}\n"
+        f"@@ -1,{old} +1,{total} @@\n{body}"
+    )
 
 
-def test_diff_coverage_counts_only_changed_executable_lines_of_targets():
-    manifest = _manifest(("backend/app/core/config.py", [4, 5, 6, 7]))
-    coverage = {"backend/app/core/config.py": LineCoverage(executable={1, 5, 6, 7}, covered={1, 5})}
-    result = diff_coverage(manifest, coverage)
-    assert result["files"] == [{
-        "path": "backend/app/core/config.py",
-        "covered_lines": [5],
-        "uncovered_lines": [6, 7],
-        "percent": 33.3,
-    }]
-    assert result["total"] == {"relevant": 3, "covered": 1, "percent": 33.3}
+def repository(tmp_path: Path) -> Path:
+    subprocess.run(["git", "init", "--quiet", str(tmp_path)], check=True)
+    return tmp_path
 
 
-def test_target_missing_from_the_report_counts_every_changed_line_as_uncovered():
-    manifest = _manifest(("frontend/src/lib/new.ts", [1, 2]), ("frontend/src/lib/http.ts", [8]))
-    coverage = {"frontend/src/lib/http.ts": LineCoverage(executable={8}, covered={8})}
-    result = diff_coverage(manifest, coverage)
-    assert result["files"][0] == {
-        "path": "frontend/src/lib/new.ts",
-        "covered_lines": [],
-        "uncovered_lines": [1, 2],
-        "percent": 0.0,
-    }
-    assert result["total"] == {"relevant": 3, "covered": 1, "percent": 33.3}
+def test_changed_executable_lines_are_split_into_covered_and_uncovered(tmp_path):
+    repo = repository(tmp_path)
+    report = tmp_path / "coverage.xml"
+    report.write_text(cobertura(repo / "backend" / "app", "router.py", {1: 1, 2: 3, 3: 0, 4: 0}), encoding="utf-8")
+    diff = added_lines_diff("backend/app/router.py", [2, 3, 5], total=5)
+    assert changed_line_coverage(diff, report, repo) == [
+        FileCoverage(path="backend/app/router.py", covered_lines=[2], uncovered_lines=[3])
+    ]
 
 
-def test_changes_without_executable_lines_have_no_percentage():
-    manifest = _manifest(("backend/app/factory.py", [2]))
-    coverage = {"backend/app/factory.py": LineCoverage(executable={9}, covered={9})}
-    result = diff_coverage(manifest, coverage)
-    assert result["files"][0]["percent"] is None
-    assert result["total"] == {"relevant": 0, "covered": 0, "percent": None}
+def test_files_the_stack_excludes_from_coverage_are_not_targets(tmp_path):
+    repo = repository(tmp_path)
+    report = tmp_path / "coverage.xml"
+    report.write_text(cobertura(repo / "backend" / "app", "router.py", {1: 1}), encoding="utf-8")
+    diff = added_lines_diff("backend/app/schemas.py", [1], total=1)
+    assert changed_line_coverage(diff, report, repo) == []
+
+
+def test_paths_keep_the_case_they_have_in_the_diff(tmp_path):
+    repo = repository(tmp_path)
+    report = tmp_path / "coverage.xml"
+    report.write_text(cobertura(repo / "frontend", "src/useClearCompleted.ts", {1: 0}), encoding="utf-8")
+    diff = added_lines_diff("frontend/src/useClearCompleted.ts", [1], total=1)
+    [file] = changed_line_coverage(diff, report, repo)
+    assert file.path == "frontend/src/useClearCompleted.ts"
+
+
+def test_without_a_coverage_report_nothing_can_be_measured(tmp_path):
+    repo = repository(tmp_path)
+    assert changed_line_coverage(added_lines_diff("backend/app/x.py", [1], 1), tmp_path / "none.xml", repo) is None
+
+
+def test_an_empty_diff_has_nothing_to_measure(tmp_path):
+    repo = repository(tmp_path)
+    report = tmp_path / "coverage.xml"
+    report.write_text(cobertura(repo / "backend" / "app", "router.py", {1: 1}), encoding="utf-8")
+    assert changed_line_coverage("", report, repo) == []
+
+
+def test_the_total_is_the_share_of_covered_changed_lines_across_files():
+    files = [
+        FileCoverage(path="a.py", covered_lines=[1, 2, 3], uncovered_lines=[4]),
+        FileCoverage(path="b.py", covered_lines=[], uncovered_lines=[1, 2, 3, 4]),
+    ]
+    assert total_percent(files) == 37.5
+    assert files[0].percent == 75.0
+    assert total_percent([]) is None

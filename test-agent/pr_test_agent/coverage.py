@@ -1,56 +1,51 @@
-from dataclasses import dataclass, field
-from pathlib import PurePosixPath
+import json
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+from unidiff import PatchSet
+
+from .models import FileCoverage, percent_of
 
 
-@dataclass
-class LineCoverage:
-    executable: set[int] = field(default_factory=set)
-    covered: set[int] = field(default_factory=set)
+def _diff_cover(diff: str, report: Path, repo: Path) -> dict:
+    with tempfile.TemporaryDirectory() as workdir:
+        diff_file = Path(workdir, "changes.diff")
+        diff_file.write_text(diff, encoding="utf-8")
+        output = Path(workdir, "diff-cover.json")
+        subprocess.run(
+            [
+                sys.executable, "-m", "diff_cover.diff_cover_tool", str(report.resolve()),
+                "--diff-file", str(diff_file), "--format", f"json:{output}", "--quiet",
+            ],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+        )
+        return json.loads(output.read_text(encoding="utf-8"))["src_stats"]
 
 
-def parse_lcov(text: str, prefix: str) -> dict[str, LineCoverage]:
-    coverage: dict[str, LineCoverage] = {}
-    current: LineCoverage | None = None
-    for line in text.splitlines():
-        if line.startswith("SF:"):
-            path = str(PurePosixPath(prefix, line[3:].replace("\\", "/")))
-            current = coverage.setdefault(path, LineCoverage())
-        elif line.startswith("DA:") and current is not None:
-            number, hits = line[3:].split(",")[:2]
-            current.executable.add(int(number))
-            if int(hits) > 0:
-                current.covered.add(int(number))
-        elif line == "end_of_record":
-            current = None
-    return coverage
+def changed_line_coverage(diff: str, report: Path, repo: Path) -> list[FileCoverage] | None:
+    if not report.is_file():
+        return None
+    if not diff.strip():
+        return []
+    paths = {change.path.casefold(): change.path for change in PatchSet(diff)}
+    files = []
+    for reported_path, stats in sorted(_diff_cover(diff, report, repo).items()):
+        normalized = reported_path.replace("\\", "/")
+        files.append(
+            FileCoverage(
+                path=paths.get(normalized.casefold(), normalized),
+                covered_lines=sorted(stats["covered_lines"]),
+                uncovered_lines=sorted(stats["violation_lines"]),
+            )
+        )
+    return [file for file in files if file.covered_lines or file.uncovered_lines]
 
 
-def _percent(covered: int, relevant: int) -> float | None:
-    return round(100 * covered / relevant, 1) if relevant else None
-
-
-def _file_diff_coverage(path: str, changed_lines: list[int], coverage: dict[str, LineCoverage]) -> dict:
-    report = coverage.get(path)
-    changed = set(changed_lines)
-    relevant = changed & report.executable if report else changed
-    covered = relevant & report.covered if report else set()
-    return {
-        "path": path,
-        "covered_lines": sorted(covered),
-        "uncovered_lines": sorted(relevant - covered),
-        "percent": _percent(len(covered), len(relevant)),
-    }
-
-
-def diff_coverage(manifest: dict, coverage: dict[str, LineCoverage]) -> dict:
-    files = [
-        _file_diff_coverage(entry["path"], entry["changed_lines"], coverage)
-        for entry in manifest["files"]
-        if entry["target"]
-    ]
-    covered = sum(len(item["covered_lines"]) for item in files)
-    relevant = covered + sum(len(item["uncovered_lines"]) for item in files)
-    return {
-        "files": files,
-        "total": {"relevant": relevant, "covered": covered, "percent": _percent(covered, relevant)},
-    }
+def total_percent(files: list[FileCoverage]) -> float | None:
+    covered = sum(len(file.covered_lines) for file in files)
+    relevant = covered + sum(len(file.uncovered_lines) for file in files)
+    return percent_of(covered, relevant)

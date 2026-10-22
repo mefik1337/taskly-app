@@ -31,6 +31,6 @@ fi
 
 cd "$repo_root/backend"
 exec "$python" -m pytest -q --color=no -p no:cacheprovider \
-  --cov=app --cov-report=term-missing:skip-covered --cov-report=lcov:coverage/lcov.info \
-  --junitxml="$out_dir/backend-junit.xml" \
+  --cov=app --cov-report=term-missing:skip-covered --cov-report=xml:coverage/coverage.xml \
+  --junitxml="$out_dir/junit.xml" \
   "${targets[@]}"

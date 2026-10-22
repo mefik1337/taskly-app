@@ -1,0 +1,99 @@
+{{ marker }}
+## 🧪 Test agent: {{ stack }}
+
+{{ headline }}
+
+{% if report %}
+> {{ report.summary | text(600) }}
+
+{% endif %}
+{% if broken_before %}
+### Tests failing before the agent ran
+
+{% for case in broken_before %}
+- {{ case.name | code }}: {{ case.message | text }}
+{% endfor %}
+
+{% endif %}
+{% if report %}
+### Agent decisions
+
+| Changed file | Decision | Reason |
+| --- | --- | --- |
+{% for decision in report.decisions %}
+| {{ decision.path | code }} | {{ actions[decision.action] }} | {{ decision.reason | text }} |
+{% endfor %}
+
+{% if report.test_files %}
+### Tests written by the agent
+
+| Test file | Change | Test cases |
+| --- | --- | --- |
+{% for file in report.test_files %}
+| {{ file.path | code }} | {{ file.change }} | {{ file.cases | length }} |
+{% endfor %}
+
+{% endif %}
+{% endif %}
+{% if verification %}
+### Verification
+
+{% if verification.suites %}
+| Suite | Tests | Passed | Failed | Skipped |
+| --- | --- | --- | --- | --- |
+{% for suite in verification.suites %}
+| {{ suite.name | text }} | {{ suite.tests }} | {{ suite.passed }} | {{ suite.failed }} | {{ suite.skipped }} |
+{% endfor %}
+{% endif %}
+{% if failing %}
+
+**Failing tests:**
+
+{% for case in failing %}
+- {{ case.name | code }}: {{ case.message | text }}
+{% endfor %}
+{% endif %}
+{% if verification.violations %}
+
+**Guard violations:**
+
+{% for violation in verification.violations %}
+- {{ violation | text }}
+{% endfor %}
+{% endif %}
+
+{% endif %}
+{% if report and report.suspected_bugs %}
+### Possible bugs in production code
+
+{% for bug in report.suspected_bugs %}
+- {{ bug.path | code }}: {{ bug.description | text }}
+{% endfor %}
+
+{% endif %}
+{% if coverage_after %}
+### Coverage of changed lines
+
+**Changed lines covered:** {{ total_before | percent }} → {{ total_after | percent }}
+
+| File | Before | After | Uncovered lines after |
+| --- | --- | --- | --- |
+{% for file in coverage_after %}
+| {{ file.path | code }} | {{ before.get(file.path) | percent }} | {{ file.percent | percent }} | {{ file.uncovered_lines | ranges }} |
+{% endfor %}
+
+{% endif %}
+{% if report %}
+### Skills used
+
+{{ report.skills_used | map("code") | join(", ") }}
+
+{% endif %}
+{% if run %}
+**Agent run:** {{ (run.model or "unknown") | code }}, {{ run.passes }} {{ "pass" if run.passes == 1 else "passes" }}, {{ run.turns or 0 }} turns, ${{ "%.2f" | format(run.cost_usd) }}, {{ run.denied_tool_calls | length }} denied tool {{ "call" if run.denied_tool_calls | length == 1 else "calls" }}
+{% for call in run.denied_tool_calls %}
+- {{ call | text }}
+{% endfor %}
+
+{% endif %}
+[Workflow run]({{ run_url }})

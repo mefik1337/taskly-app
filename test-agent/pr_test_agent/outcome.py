@@ -1,26 +1,23 @@
-def suites_pass(suites: dict) -> bool:
-    return bool(suites) and all(
-        summary["tests"] > 0 and summary["failures"] == 0 and summary["errors"] == 0
-        for summary in suites.values()
-    )
+from typing import Literal
+
+from .models import AgentReport, Analysis, Verification
+
+Status = Literal[
+    "not_measured", "no_targets", "agent_failed", "rejected", "verification_failed", "no_changes", "verified"
+]
 
 
-def resolve_status(
-    *,
-    has_targets: bool,
-    agent_report: dict | None,
-    violations: list[str],
-    suites: dict,
-    patch_changed: bool,
-) -> str:
-    if not has_targets:
+def resolve_status(analysis: Analysis, report: AgentReport | None, verification: Verification | None) -> Status:
+    if not analysis.coverage_measured:
+        return "not_measured"
+    if not analysis.targets:
         return "no_targets"
-    if agent_report is None:
+    if report is None:
         return "agent_failed"
-    if violations:
+    if verification is not None and verification.violations:
         return "rejected"
-    if not suites_pass(suites):
+    if verification is None or not verification.suites or not all(suite.green for suite in verification.suites):
         return "verification_failed"
-    if not patch_changed:
+    if not verification.patch_files:
         return "no_changes"
     return "verified"
