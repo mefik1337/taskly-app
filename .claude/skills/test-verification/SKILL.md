@@ -21,6 +21,7 @@ Paths are repository-relative (`backend/tests/core/test_config.py`, `frontend/sr
 1. Run the runner with the test files you touched.
 2. On failure, read the assertion message and the code under test, then classify:
    - **Test defect**: wrong query, wrong fixture, wrong expectation from misreading the code, missing `await`. Fix the test.
+   - **Stale test**: an existing test pins behaviour the change replaced on purpose (a route map without the new route, a component rendered without a newly required provider or mock). Update it to the new behaviour and list that file and case in the report.
    - **Production defect**: the expectation follows from the code's evident intent (its name, its callers, the API contract, the UI copy) and the code contradicts it. Remove that one assertion and record the defect for `suspected_bugs`.
    - **Environment**: missing dependency, unreachable service. Stop and report it; tests cannot fix it.
 3. Repeat. After three failed fix attempts on the same test case, delete that case and report why.
