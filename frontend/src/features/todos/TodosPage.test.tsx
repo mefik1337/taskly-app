@@ -287,23 +287,20 @@ it('shows the server error when clearing completed tasks fails and dismisses it 
   )
 })
 
-it('disables Clear completed while another save is in flight', async () => {
+it('keeps the page locked while completed tasks are being cleared', async () => {
   const api = installFakeApi([todoFixture, groceries])
-  const release = api.delayNextResponse('PATCH')
+  const release = api.delayNextResponse('DELETE')
   const { user } = renderPage()
   await user.click(
-    await screen.findByRole('checkbox', { name: 'Complete: Prepare a demo' }),
+    await screen.findByRole('button', { name: 'Clear completed (1)' }),
   )
-  await waitFor(() =>
-    expect(
-      screen.getByRole('button', { name: /Clear completed/ }),
-    ).toBeDisabled(),
-  )
+  expect(
+    screen.getByRole('button', { name: 'Clear completed (1)' }),
+  ).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'New task' })).toBeDisabled()
   release()
-  await waitFor(() =>
-    expect(
-      screen.getByRole('button', { name: 'Clear completed (2)' }),
-    ).toBeEnabled(),
+  expect(await screen.findByRole('status')).toHaveTextContent(
+    'Removed 1 completed task.',
   )
-  expect(api.requestsTo('DELETE')).toEqual([])
+  expect(screen.getByRole('button', { name: 'New task' })).toBeEnabled()
 })

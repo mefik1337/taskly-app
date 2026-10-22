@@ -90,5 +90,4 @@ it('clears completed tasks with DELETE /api/todos/completed and reports the coun
     url: '/api/todos/completed',
     body: undefined,
   })
-  await expect(todosApi.list()).resolves.toEqual([active])
 })

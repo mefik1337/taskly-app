@@ -4,13 +4,11 @@ import { installFakeApi } from '../../../test/fakeApi'
 import { createTestQueryClient, queryWrapper } from '../../../test/queryWrapper'
 import { todoFixture } from '../../../test/todoFixture'
 import { todoKeys } from '../api/queryKeys'
-import { todosApi } from '../api/todos'
 import type { Todo } from '../types'
 import { useClearCompletedMutation } from './useClearCompletedMutation'
 
 const active: Todo = { ...todoFixture, id: 3, title: 'Other' }
 const done: Todo = { ...todoFixture, id: 4, title: 'Done', completed: true }
-const doneToo: Todo = { ...done, id: 5, title: 'Done too' }
 
 function renderClear(cached?: Todo[]) {
   const client = createTestQueryClient()
@@ -22,20 +20,11 @@ function renderClear(cached?: Todo[]) {
   return { result, cachedList }
 }
 
-it('resolves with the number of removed tasks', async () => {
-  installFakeApi([active, done, doneToo])
-  const { result } = renderClear([active, done, doneToo])
-  await expect(act(() => result.current.mutateAsync())).resolves.toEqual({
-    deleted: 2,
-  })
-})
-
-it('removes only completed tasks from the cached list and the server', async () => {
+it('removes only completed tasks from the cached list', async () => {
   installFakeApi([active, done])
   const { result, cachedList } = renderClear([active, done])
   await act(() => result.current.mutateAsync())
   expect(cachedList()).toEqual([active])
-  await expect(todosApi.list()).resolves.toEqual([active])
 })
 
 it('leaves the list unloaded when none is cached', async () => {

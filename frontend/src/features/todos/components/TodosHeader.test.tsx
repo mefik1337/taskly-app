@@ -54,14 +54,18 @@ it('hides Clear completed when no task is completed', () => {
       onClearCompleted={vi.fn()}
     />,
   )
-  expect(screen.queryByRole('button', { name: /Clear completed/ })).toBeNull()
+  expect(
+    screen.queryByRole('button', { name: /Clear completed/ }),
+  ).not.toBeInTheDocument()
 })
 
 it('hides Clear completed without a handler', () => {
   renderWithProviders(
     <TodosHeader disabled={false} completedCount={2} onCreate={vi.fn()} />,
   )
-  expect(screen.queryByRole('button', { name: /Clear completed/ })).toBeNull()
+  expect(
+    screen.queryByRole('button', { name: /Clear completed/ }),
+  ).not.toBeInTheDocument()
 })
 
 it('blocks Clear completed while disabled', () => {
