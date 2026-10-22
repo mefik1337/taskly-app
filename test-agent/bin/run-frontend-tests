@@ -26,6 +26,6 @@ if (( ${#targets[@]} )); then
   npx --no-install prettier --log-level warn --write "${targets[@]}"
 fi
 npx --no-install tsc --noEmit
-exec npx --no-install vitest run --coverage \
+exec npx --no-install vitest run --coverage --coverage.reportOnFailure=true \
   --reporter=default --reporter=junit --outputFile.junit="$out_dir/frontend-junit.xml" \
   "${targets[@]}"
