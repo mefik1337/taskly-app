@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+out_dir="${TEST_AGENT_OUT:-$repo_root/.test-agent/out}"
+mkdir -p "$out_dir"
+
+targets=()
+for path in "$@"; do
+  case "$path" in
+    backend/tests/*.py) ;;
+    *) echo "run-backend-tests: only files under backend/tests/ are accepted, got: $path" >&2; exit 2 ;;
+  esac
+  if [[ "$path" == *..* || ! -f "$repo_root/$path" ]]; then
+    echo "run-backend-tests: not an existing test file: $path" >&2
+    exit 2
+  fi
+  targets+=("${path#backend/}")
+done
+
+if [[ -x "$repo_root/backend/.venv/bin/python" ]]; then
+  python="$repo_root/backend/.venv/bin/python"
+elif [[ -x "$repo_root/backend/.venv/Scripts/python.exe" ]]; then
+  python="$repo_root/backend/.venv/Scripts/python.exe"
+else
+  python="${PYTHON:-python}"
+fi
+
+cd "$repo_root/backend"
+exec "$python" -m pytest -q -p no:cacheprovider \
+  --cov=app --cov-report=term-missing:skip-covered --cov-report=lcov:coverage/lcov.info \
+  --junitxml="$out_dir/backend-junit.xml" \
+  "${targets[@]}"

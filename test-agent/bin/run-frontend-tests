@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+out_dir="${TEST_AGENT_OUT:-$repo_root/.test-agent/out}"
+mkdir -p "$out_dir"
+
+targets=()
+for path in "$@"; do
+  case "$path" in
+    frontend/src/*.test.ts | frontend/src/*.test.tsx | frontend/src/test/*.ts | frontend/src/test/*.tsx) ;;
+    *) echo "run-frontend-tests: only frontend test files are accepted, got: $path" >&2; exit 2 ;;
+  esac
+  if [[ "$path" == *..* || ! -f "$repo_root/$path" ]]; then
+    echo "run-frontend-tests: not an existing test file: $path" >&2
+    exit 2
+  fi
+  targets+=("${path#frontend/}")
+done
+
+cd "$repo_root/frontend"
+if (( ${#targets[@]} )); then
+  npx --no-install prettier --log-level warn --write "${targets[@]}"
+fi
+npx --no-install tsc --noEmit
+exec npx --no-install vitest run --coverage \
+  --reporter=default --reporter=junit --outputFile.junit="$out_dir/frontend-junit.xml" \
+  "${targets[@]}"
