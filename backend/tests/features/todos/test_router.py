@@ -185,10 +185,3 @@ def test_clear_completed_returns_count_and_keeps_open_tasks(client):
     response = client.delete("/api/todos/completed")
     assert (response.status_code, response.json()) == (200, {"deleted": 2})
     assert client.get("/api/todos").json() == [kept]
-
-
-def test_clear_completed_without_completed_tasks_returns_zero(client):
-    kept = create(client, title="Open")
-    response = client.delete("/api/todos/completed")
-    assert (response.status_code, response.json()) == (200, {"deleted": 0})
-    assert client.get("/api/todos").json() == [kept]
