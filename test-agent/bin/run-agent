@@ -64,7 +64,7 @@ claude -p "$prompt" \
 claude_status=$?
 set -e
 
-PYTHONPATH="$repo_root/test-agent" "$python_bin" -m pr_test_agent transcript \
+"$python_bin" test-agent/main.py transcript \
   --in "$out_dir/transcript.jsonl" \
   --report-out "$out_dir/agent-report.json" \
   --run-out "$out_dir/agent-run.json"
