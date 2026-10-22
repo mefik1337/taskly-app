@@ -60,5 +60,6 @@ it('keeps the task deleted when an older list request finishes afterwards', asyn
   await waitFor(() => expect(api.requestsTo('GET')).toHaveLength(2))
   await act(() => result.current.remove.mutateAsync(7))
   await act(async () => release())
+  await waitFor(() => expect(result.current.list.isFetching).toBe(false))
   expect(result.current.list.data).toEqual([other])
 })

@@ -71,6 +71,7 @@ it('keeps the saved task when an older list request finishes afterwards', async 
     result.current.update.mutateAsync({ id: 7, input: { completed: true } }),
   )
   await act(async () => release())
+  await waitFor(() => expect(result.current.list.isFetching).toBe(false))
   expect(result.current.list.data).toEqual([
     expect.objectContaining({ id: 7, completed: true }),
   ])

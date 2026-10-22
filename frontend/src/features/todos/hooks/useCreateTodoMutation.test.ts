@@ -86,5 +86,6 @@ it('keeps the created task when an older list request finishes afterwards', asyn
     created = await result.current.create.mutateAsync(input)
   })
   await act(async () => release())
+  await waitFor(() => expect(result.current.list.isFetching).toBe(false))
   expect(result.current.list.data).toEqual([created, older])
 })
