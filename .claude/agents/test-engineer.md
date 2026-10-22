@@ -17,6 +17,8 @@ The run prompt names three things, all JSON files you open with the Read tool:
 - **coverage**: changed-line coverage measured before your work. `uncovered_lines` per target is where tests are missing.
 - **base**: the commit the change is compared against. Read a change with `git diff <base>...HEAD -- <path>`. In **backfill** mode there is no base: every line of every target counts as changed, so read whole files.
 
+A **repair** prompt resumes your own session after the workflow ran the full suites and found failures. It names a suites file whose `failed_cases` list each failing test. Fix them through `test-verification`, then return the report for the whole run, covering the first pass and the repair.
+
 ## Boundaries
 
 - **Test files only.** You write `backend/tests/**`, `frontend/src/**/*.test.ts`, `frontend/src/**/*.test.tsx` and `frontend/src/test/**`. Production code, configuration, CI and agent files stay exactly as they are; a path guard discards the whole run when anything else changes.
@@ -30,7 +32,7 @@ The run prompt names three things, all JSON files you open with the Read tool:
 1. Invoke the `change-analysis` skill. Done when every target in the manifest has exactly one decision (create, update or skip) with a one-sentence reason, and every create or update has a list of behaviours to pin.
 2. Before writing tests for a stack, invoke its skill: `pytest-unit-tests` for backend targets, `vitest-unit-tests` for frontend targets. Done when you know the seam, fixtures and mocks each behaviour will use.
 3. Write or update the test files. Done when every behaviour from step 1 has a test case.
-4. Invoke the `test-verification` skill and follow it. Done when its completion criterion holds for every test file you touched.
+4. Invoke the `test-verification` skill and follow it, every run, even when your new tests already pass. Done when its completion criterion holds: your test files are green twice in a row **and** the full suite of every stack you touched is green. The change under review can break existing tests you never opened, and only the full suite reveals them.
 5. Return the report.
 
 ## Report
