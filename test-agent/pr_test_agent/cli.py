@@ -63,12 +63,18 @@ def _diff_coverage(args) -> int:
     return 0
 
 
+def _missing_report(suite: str) -> dict:
+    return {
+        "tests": 0, "passed": 0, "failures": 0, "errors": 1, "skipped": 0,
+        "failed_cases": [{"name": suite, "message": "No test report was produced; the runner failed before running tests."}],
+    }
+
+
 def _junit(args) -> int:
     suites = {}
     for suite, path in _pairs(args.report):
         text = _read_text(path)
-        if text is not None:
-            suites[suite] = summarize_junit(text)
+        suites[suite] = summarize_junit(text) if text is not None else _missing_report(suite)
     _write_json(args.out, suites)
     return 0
 

@@ -139,3 +139,12 @@ def test_transcript_command_writes_report_only_when_the_agent_produced_one(tmp_p
                  "--run-out", str(tmp_path / "crashed-run.json")]) == 0
     assert not (tmp_path / "missing.json").exists()
     assert _read_json(tmp_path / "crashed-run.json")["outcome"] == "error_max_turns"
+
+
+def test_junit_command_records_a_missing_report_as_a_failed_suite(tmp_path):
+    out = tmp_path / "suites.json"
+    assert main(["junit", "--report", f"frontend={tmp_path / 'never-written.xml'}", "--out", str(out)]) == 0
+    assert _read_json(out) == {"frontend": {
+        "tests": 0, "passed": 0, "failures": 0, "errors": 1, "skipped": 0,
+        "failed_cases": [{"name": "frontend", "message": "No test report was produced; the runner failed before running tests."}],
+    }}
