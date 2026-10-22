@@ -1,54 +1,60 @@
-from types import SimpleNamespace
-from unittest.mock import Mock
+from datetime import datetime, timezone
 
 import pytest
-from sqlalchemy.orm import Session
-from starlette.requests import Request
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
 
-from app.api.dependencies import get_repository
-from app.features.todos.repository import TodoRepository
-
-
-def make_request(session_factory):
-    app = SimpleNamespace(state=SimpleNamespace(session_factory=session_factory))
-    return Request({"type": "http", "app": app})
+from app.api.dependencies import Repository
+from app.factory import create_app
+from app.features.todos.models import TodoRecord
+from app.features.todos.schemas import TodoCreate
 
 
-def test_session_creation_failure_propagates_from_repository_dependency():
-    session_factory = Mock(side_effect=RuntimeError("Session unavailable"))
-    request = make_request(session_factory)
-    dependency = get_repository(request)
-    with pytest.raises(RuntimeError, match="Session unavailable"):
-        next(dependency)
-    session_factory.assert_called_once_with()
+@pytest.fixture
+def pooled_engine(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'taskly.db'}", connect_args={"check_same_thread": False})
+    yield engine
+    engine.dispose()
 
 
-def test_yields_a_repository_bound_to_a_new_session():
-    session = Mock(spec=Session)
-    dependency = get_repository(make_request(Mock(return_value=session)))
-    repository = next(dependency)
-    assert isinstance(repository, TodoRepository)
-    assert repository.session is session
-    session.close.assert_not_called()
+@pytest.fixture
+def app_client(pooled_engine, serve_engine):
+    serve_engine(pooled_engine)
+    app = create_app("sqlite://")
+    held_sessions = []
+
+    @app.post("/api/failing-write")
+    def failing_write(repo: Repository):
+        held_sessions.append(repo.session)
+        now = datetime.now(timezone.utc)
+        repo.session.add(TodoRecord(title="Half written", created_at=now, updated_at=now))
+        repo.session.flush()
+        raise RuntimeError("handler failed")
+
+    @app.post("/api/held-write", status_code=201)
+    def held_write(repo: Repository):
+        held_sessions.append(repo.session)
+        return repo.create(TodoCreate(title="Task"))
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        yield client
 
 
-def test_closes_the_session_without_rollback_after_a_successful_request():
-    session = Mock(spec=Session)
-    dependency = get_repository(make_request(Mock(return_value=session)))
-    next(dependency)
-    with pytest.raises(StopIteration):
-        next(dependency)
-    session.close.assert_called_once_with()
-    session.rollback.assert_not_called()
+def test_request_that_fails_mid_write_returns_500_and_persists_nothing(app_client):
+    assert app_client.post("/api/failing-write").status_code == 500
+    assert app_client.get("/api/todos").json() == []
 
 
-def test_rolls_back_closes_and_reraises_when_the_request_fails():
-    session = Mock(spec=Session)
-    manager = Mock()
-    session.rollback = manager.rollback
-    session.close = manager.close
-    dependency = get_repository(make_request(Mock(return_value=session)))
-    next(dependency)
-    with pytest.raises(ValueError, match="boom"):
-        dependency.throw(ValueError("boom"))
-    assert [call[0] for call in manager.mock_calls] == ["rollback", "close"]
+def test_request_that_fails_mid_write_releases_its_connection(app_client, pooled_engine):
+    app_client.post("/api/failing-write")
+    assert pooled_engine.pool.checkedout() == 0
+
+
+def test_successful_request_releases_its_connection(app_client, pooled_engine):
+    assert app_client.post("/api/held-write").status_code == 201
+    assert pooled_engine.pool.checkedout() == 0
+
+
+def test_each_request_sees_writes_committed_by_earlier_requests(app_client):
+    created = app_client.post("/api/todos", json={"title": "Task"}).json()
+    assert app_client.get("/api/todos").json() == [created]

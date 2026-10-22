@@ -1,55 +1,68 @@
-from unittest.mock import Mock
+from datetime import datetime, timezone
 
-from sqlalchemy import inspect
-from sqlalchemy.orm import Session
+import pytest
+from sqlalchemy import event, func, inspect, select
 
-import app.core.database as database
 from app.core.database import create_database_engine, create_session_factory, initialize
+from app.features.todos.models import TodoRecord
 
 
-def test_engine_uses_the_postgresql_psycopg_driver():
-    url = "postgresql+psycopg://taskly:taskly@localhost:5432/taskly"
-    engine = create_database_engine(url)
-    try:
-        assert engine.url.drivername == "postgresql+psycopg"
-        assert engine.dialect.name == "postgresql"
-        assert engine.dialect.driver == "psycopg"
-        assert engine.url.database == "taskly"
-    finally:
-        engine.dispose()
+class ConnectionRefused(Exception):
+    pass
 
 
-def test_engine_pings_connections_and_limits_connect_time(monkeypatch):
-    create_engine = Mock()
-    monkeypatch.setattr(database, "create_engine", create_engine)
-    assert create_database_engine("postgresql+psycopg://h/db") is create_engine.return_value
-    create_engine.assert_called_once_with(
-        "postgresql+psycopg://h/db",
-        pool_pre_ping=True,
-        connect_args={"connect_timeout": 10},
-    )
+def make_record(title):
+    now = datetime(2026, 10, 5, 9, tzinfo=timezone.utc)
+    return TodoRecord(title=title, created_at=now, updated_at=now)
 
 
-def test_session_factory_binds_sessions_to_engine_without_expiring_on_commit(sqlite_engine):
-    session = create_session_factory(sqlite_engine)()
-    try:
-        assert isinstance(session, Session)
-        assert session.get_bind() is sqlite_engine
-        assert session.expire_on_commit is False
-    finally:
-        session.close()
+def count_rows(engine):
+    with engine.connect() as connection:
+        return connection.scalar(select(func.count()).select_from(TodoRecord))
+
+
+def test_engine_connects_to_the_configured_server_with_a_ten_second_timeout():
+    engine = create_database_engine("postgresql+psycopg://taskly:pw@db.internal:6543/taskly_db")
+    attempted = {}
+
+    @event.listens_for(engine, "do_connect")
+    def refuse(dialect, connection_record, cargs, cparams):
+        attempted.update(cparams)
+        raise ConnectionRefused()
+
+    with pytest.raises(ConnectionRefused):
+        engine.connect()
+    assert {name: attempted[name] for name in ("host", "port", "dbname", "user", "connect_timeout")} == {
+        "host": "db.internal", "port": 6543, "dbname": "taskly_db", "user": "taskly", "connect_timeout": 10,
+    }
 
 
 def test_initialize_creates_the_todos_table(sqlite_engine):
     initialize(sqlite_engine)
-    columns = {column["name"] for column in inspect(sqlite_engine).get_columns("todos")}
-    assert columns == {
-        "id", "title", "description", "priority", "due_date",
-        "completed", "created_at", "updated_at",
-    }
-
-
-def test_initialize_is_idempotent(sqlite_engine):
-    initialize(sqlite_engine)
-    initialize(sqlite_engine)
     assert inspect(sqlite_engine).get_table_names() == ["todos"]
+
+
+def test_initialize_again_keeps_existing_rows(sqlite_engine):
+    initialize(sqlite_engine)
+    with create_session_factory(sqlite_engine)() as session:
+        session.add(make_record("Existing"))
+        session.commit()
+    initialize(sqlite_engine)
+    assert count_rows(sqlite_engine) == 1
+
+
+def test_session_factory_sessions_write_to_the_engine_database(sqlite_engine):
+    initialize(sqlite_engine)
+    with create_session_factory(sqlite_engine)() as session:
+        session.add(make_record("Stored"))
+        session.commit()
+    assert count_rows(sqlite_engine) == 1
+
+
+def test_session_factory_keeps_committed_objects_readable_after_the_session_closes(sqlite_engine):
+    initialize(sqlite_engine)
+    record = make_record("Readable")
+    with create_session_factory(sqlite_engine)() as session:
+        session.add(record)
+        session.commit()
+    assert record.title == "Readable"

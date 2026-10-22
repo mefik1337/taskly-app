@@ -1,139 +1,178 @@
 import pytest
 
-from app.features.todos.schemas import TodoCreate, TodoUpdate
+NOT_FOUND = {"detail": "Task not found."}
 
 
-def test_list_returns_tasks_from_repository(client, repository_mock, todo):
-    repository_mock.list.return_value = [todo]
-    response = client.get("/api/todos")
-    assert response.status_code == 200
-    assert response.json() == [todo.model_dump(mode="json")]
-    repository_mock.list.assert_called_once_with()
+def generated_fields_removed(body):
+    return {name: value for name, value in body.items() if name not in {"id", "created_at", "updated_at"}}
 
 
-def test_list_returns_an_empty_array_when_there_are_no_tasks(client, repository_mock):
-    response = client.get("/api/todos")
-    assert response.status_code == 200
-    assert response.json() == []
-
-
-def test_create_trims_input_and_returns_created_task(client, repository_mock, todo):
-    repository_mock.create.return_value = todo
-    response = client.post("/api/todos", json={"title": "  Plan the sprint  ", "priority": "high"})
+def create(client, **payload):
+    response = client.post("/api/todos", json=payload)
     assert response.status_code == 201
-    assert response.json() == todo.model_dump(mode="json")
-    repository_mock.create.assert_called_once_with(
-        TodoCreate(title="Plan the sprint", priority="high")
-    )
+    return response.json()
 
 
-def test_create_applies_defaults_for_omitted_fields(client, repository_mock, todo):
-    repository_mock.create.return_value = todo
-    client.post("/api/todos", json={"title": "Task"})
-    payload = repository_mock.create.call_args.args[0]
-    assert payload.model_dump() == {
-        "title": "Task", "description": "", "priority": "medium",
+def error_locations(response):
+    return [error["loc"] for error in response.json()["detail"]]
+
+
+def test_list_without_tasks_returns_an_empty_array(client):
+    response = client.get("/api/todos")
+    assert (response.status_code, response.json()) == (200, [])
+
+
+def test_create_returns_201_with_trimmed_text_and_defaults(client):
+    response = client.post("/api/todos", json={"title": "  Plan the sprint  ", "description": "  Agenda  "})
+    assert response.status_code == 201
+    assert generated_fields_removed(response.json()) == {
+        "title": "Plan the sprint", "description": "Agenda", "priority": "medium",
         "due_date": None, "completed": False,
     }
 
 
-def test_create_accepts_maximum_length_title_and_description(client, repository_mock, todo):
-    repository_mock.create.return_value = todo
-    response = client.post("/api/todos", json={"title": "x" * 120, "description": "d" * 2000})
-    assert response.status_code == 201
-    repository_mock.create.assert_called_once_with(TodoCreate(title="x" * 120, description="d" * 2000))
+def test_created_task_is_returned_by_get(client):
+    body = create(
+        client, title="Plan the sprint", description="Agenda", priority="high",
+        due_date="2026-10-15", completed=True,
+    )
+    response = client.get(f"/api/todos/{body['id']}")
+    assert (response.status_code, response.json()) == (200, body)
+    assert generated_fields_removed(body) == {
+        "title": "Plan the sprint", "description": "Agenda", "priority": "high",
+        "due_date": "2026-10-15", "completed": True,
+    }
 
 
-@pytest.mark.parametrize("payload", [
-    {"title": "   "},
-    {"title": "x" * 121},
-    {"title": "Task", "priority": "urgent"},
-    {"title": "Task", "due_date": "2026-02-30"},
-    {},
-    {"title": "Task", "description": "d" * 2001},
-    {"title": "Task", "completed": "true"},
-    {"title": "Task", "completed": 1},
-    {"title": "Task", "owner": "me"},
-])
-def test_invalid_create_never_calls_repository(client, repository_mock, payload):
-    assert client.post("/api/todos", json=payload).status_code == 422
-    repository_mock.create.assert_not_called()
+def test_list_returns_200_with_the_created_task(client):
+    body = create(client, title="Plan the sprint")
+    response = client.get("/api/todos")
+    assert (response.status_code, response.json()) == (200, [body])
 
 
-def test_get_returns_the_task(client, repository_mock, todo):
-    repository_mock.get.return_value = todo
-    response = client.get("/api/todos/7")
-    assert response.status_code == 200
-    assert response.json() == todo.model_dump(mode="json")
-    repository_mock.get.assert_called_once_with(7)
+def test_create_accepts_maximum_length_title_and_description(client):
+    body = create(client, title="x" * 120, description="d" * 2000)
+    assert (body["title"], body["description"]) == ("x" * 120, "d" * 2000)
 
 
-def test_get_returns_404_for_missing_task(client, repository_mock):
-    repository_mock.get.return_value = None
+@pytest.mark.parametrize(
+    ("payload", "location"),
+    [
+        ({}, ["body", "title"]),
+        ({"title": "   "}, ["body", "title"]),
+        ({"title": "x" * 121}, ["body", "title"]),
+        ({"title": None}, ["body", "title"]),
+        ({"title": "Task", "description": "d" * 2001}, ["body", "description"]),
+        ({"title": "Task", "description": None}, ["body", "description"]),
+        ({"title": "Task", "priority": "urgent"}, ["body", "priority"]),
+        ({"title": "Task", "due_date": "2026-02-30"}, ["body", "due_date"]),
+        ({"title": "Task", "completed": "true"}, ["body", "completed"]),
+        ({"title": "Task", "completed": 1}, ["body", "completed"]),
+        ({"title": "Task", "owner": "me"}, ["body", "owner"]),
+    ],
+    ids=[
+        "missing-title", "blank-title", "title-too-long", "null-title", "description-too-long",
+        "null-description", "unknown-priority", "impossible-date", "completed-as-string",
+        "completed-as-number", "unknown-field",
+    ],
+)
+def test_invalid_create_returns_422_naming_the_field_and_stores_nothing(client, payload, location):
+    response = client.post("/api/todos", json=payload)
+    assert (response.status_code, error_locations(response)) == (422, [location])
+    assert client.get("/api/todos").json() == []
+
+
+def test_get_unknown_id_returns_404(client):
     response = client.get("/api/todos/404")
-    assert response.status_code == 404
-    assert response.json() == {"detail": "Task not found."}
+    assert (response.status_code, response.json()) == (404, NOT_FOUND)
 
 
-@pytest.mark.parametrize("method", ["get", "patch", "delete"])
-@pytest.mark.parametrize("todo_id", ["0", "-1", "abc"])
-def test_invalid_task_id_is_rejected_before_reaching_repository(client, repository_mock, method, todo_id):
-    kwargs = {"json": {"title": "Renamed"}} if method == "patch" else {}
-    response = client.request(method.upper(), f"/api/todos/{todo_id}", **kwargs)
-    assert response.status_code == 422
-    assert repository_mock.method_calls == []
+@pytest.mark.parametrize("method", ["GET", "PATCH", "DELETE"])
+@pytest.mark.parametrize("todo_id", ["0", "-1", "abc"], ids=["zero", "negative", "not-a-number"])
+def test_invalid_task_id_returns_422_naming_the_path_parameter(client, method, todo_id):
+    response = client.request(method, f"/api/todos/{todo_id}", json={"title": "Renamed"})
+    assert (response.status_code, error_locations(response)) == (422, [["path", "todo_id"]])
 
 
-def test_update_passes_the_trimmed_patch_and_returns_the_task(client, repository_mock, todo):
-    repository_mock.update.return_value = todo
-    response = client.patch("/api/todos/7", json={"title": "  Renamed  ", "completed": True})
+def test_patch_returns_the_task_with_trimmed_changes(client):
+    body = create(client, title="Plan the sprint", description="Agenda", priority="high")
+    response = client.patch(f"/api/todos/{body['id']}", json={"title": "  Renamed  ", "completed": True})
     assert response.status_code == 200
-    assert response.json() == todo.model_dump(mode="json")
-    repository_mock.update.assert_called_once_with(7, TodoUpdate(title="Renamed", completed=True))
-    patch = repository_mock.update.call_args.args[1]
-    assert patch.model_fields_set == {"title", "completed"}
+    assert generated_fields_removed(response.json()) == {
+        "title": "Renamed", "description": "Agenda", "priority": "high",
+        "due_date": None, "completed": True,
+    }
 
 
-def test_update_forwards_an_explicit_due_date_clear(client, repository_mock, todo):
-    repository_mock.update.return_value = todo
-    response = client.patch("/api/todos/7", json={"due_date": None})
+def test_patch_with_null_due_date_returns_200_with_the_date_cleared(client):
+    body = create(client, title="Plan the sprint", due_date="2026-10-15")
+    response = client.patch(f"/api/todos/{body['id']}", json={"due_date": None})
     assert response.status_code == 200
-    patch = repository_mock.update.call_args.args[1]
-    assert patch.model_dump(exclude_unset=True) == {"due_date": None}
+    assert generated_fields_removed(response.json()) == {
+        "title": "Plan the sprint", "description": "", "priority": "medium",
+        "due_date": None, "completed": False,
+    }
 
 
-def test_update_returns_404_for_missing_task(client, repository_mock):
-    repository_mock.update.return_value = None
+def test_patch_unknown_id_returns_404(client):
     response = client.patch("/api/todos/404", json={"title": "Renamed"})
-    assert response.status_code == 404
-    assert response.json() == {"detail": "Task not found."}
+    assert (response.status_code, response.json()) == (404, NOT_FOUND)
 
 
-@pytest.mark.parametrize("payload", [
-    {},
-    {"title": None},
-    {"completed": None},
-    {"title": "   "},
-    {"title": "x" * 121},
-    {"priority": "urgent"},
-    {"completed": "yes"},
-    {"owner": "me"},
-])
-def test_invalid_update_never_calls_repository(client, repository_mock, payload):
-    assert client.patch("/api/todos/7", json=payload).status_code == 422
-    repository_mock.update.assert_not_called()
+@pytest.mark.parametrize(
+    ("payload", "location"),
+    [
+        ({"title": "   "}, ["body", "title"]),
+        ({"title": "x" * 121}, ["body", "title"]),
+        ({"description": "d" * 2001}, ["body", "description"]),
+        ({"priority": "urgent"}, ["body", "priority"]),
+        ({"due_date": "2026-02-30"}, ["body", "due_date"]),
+        ({"completed": "yes"}, ["body", "completed"]),
+        ({"owner": "me"}, ["body", "owner"]),
+    ],
+    ids=[
+        "blank-title", "title-too-long", "description-too-long", "unknown-priority",
+        "impossible-date", "completed-as-string", "unknown-field",
+    ],
+)
+def test_invalid_patch_returns_422_naming_the_field_and_changes_nothing(client, payload, location):
+    body = create(client, title="Plan the sprint")
+    response = client.patch(f"/api/todos/{body['id']}", json=payload)
+    assert (response.status_code, error_locations(response)) == (422, [location])
+    assert client.get(f"/api/todos/{body['id']}").json() == body
 
 
-def test_delete_returns_204_with_an_empty_body(client, repository_mock):
-    repository_mock.delete.return_value = True
-    response = client.delete("/api/todos/7")
-    assert response.status_code == 204
-    assert response.content == b""
-    repository_mock.delete.assert_called_once_with(7)
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        ({}, "Value error, Provide at least one field to update."),
+        ({"title": None}, "Value error, Field title cannot be null."),
+        ({"description": None}, "Value error, Field description cannot be null."),
+        ({"priority": None}, "Value error, Field priority cannot be null."),
+        ({"completed": None}, "Value error, Field completed cannot be null."),
+    ],
+    ids=["empty-patch", "null-title", "null-description", "null-priority", "null-completed"],
+)
+def test_patch_rejects_empty_or_null_fields_with_422_on_the_body(client, payload, message):
+    body = create(client, title="Plan the sprint")
+    response = client.patch(f"/api/todos/{body['id']}", json=payload)
+    assert response.status_code == 422
+    assert [(error["loc"], error["msg"]) for error in response.json()["detail"]] == [(["body"], message)]
+    assert client.get(f"/api/todos/{body['id']}").json() == body
 
 
-def test_delete_returns_404_for_missing_task(client, repository_mock):
-    repository_mock.delete.return_value = False
+def test_delete_returns_204_with_an_empty_body(client):
+    body = create(client, title="Plan the sprint")
+    response = client.delete(f"/api/todos/{body['id']}")
+    assert (response.status_code, response.content) == (204, b"")
+
+
+def test_deleted_task_is_no_longer_found(client):
+    body = create(client, title="Plan the sprint")
+    client.delete(f"/api/todos/{body['id']}")
+    assert client.get(f"/api/todos/{body['id']}").status_code == 404
+
+
+def test_delete_unknown_id_returns_404(client):
     response = client.delete("/api/todos/404")
-    assert response.status_code == 404
-    assert response.json() == {"detail": "Task not found."}
+    assert (response.status_code, response.json()) == (404, NOT_FOUND)

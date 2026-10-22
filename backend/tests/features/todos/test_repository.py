@@ -1,142 +1,136 @@
 from datetime import date, datetime, timezone
-from unittest.mock import Mock
 
 import pytest
-from sqlalchemy import select
-from sqlalchemy.dialects import postgresql
-from sqlalchemy.orm import Session
 
-from app.features.todos.models import TodoRecord
 from app.features.todos.repository import TodoRepository
 from app.features.todos.schemas import TodoCreate, TodoUpdate
 
+MONDAY = datetime(2026, 10, 5, 9, tzinfo=timezone.utc)
+TUESDAY = datetime(2026, 10, 6, 9, tzinfo=timezone.utc)
+WEDNESDAY = datetime(2026, 10, 7, 9, tzinfo=timezone.utc)
+
 
 @pytest.fixture
-def stored_record(model_factory, todo_values):
-    return model_factory(todo_values)
+def read_back(open_session):
+    return lambda: TodoRepository(open_session())
 
 
 @pytest.fixture
-def session_with(stored_record):
-    session = Mock(spec=Session)
-    session.get.return_value = stored_record
-    return session
-
-
-def call_names(session):
-    return [call[0] for call in session.mock_calls]
-
-
-def test_list_maps_models_and_orders_tasks_newest_first(model_factory, todo_values, todo):
-    session = Mock(spec=Session)
-    session.scalars.return_value = [model_factory(todo_values)]
-    assert TodoRepository(session).list() == [todo]
-    statement = session.scalars.call_args.args[0]
-    expected = select(TodoRecord).order_by(TodoRecord.created_at.desc(), TodoRecord.id.desc())
-    assert statement.compare(expected)
-    compiled = str(statement.compile(dialect=postgresql.dialect()))
-    assert "ORDER BY todos.created_at DESC, todos.id DESC" in compiled
-
-
-def test_list_returns_an_empty_list_when_no_tasks_exist():
-    session = Mock(spec=Session)
-    session.scalars.return_value = []
-    assert TodoRepository(session).list() == []
-
-
-def test_get_returns_none_for_missing_task():
-    session = Mock(spec=Session)
-    session.get.return_value = None
-    assert TodoRepository(session).get(404) is None
-    session.get.assert_called_once_with(TodoRecord, 404)
-
-
-def test_get_maps_an_existing_task(session_with, todo):
-    assert TodoRepository(session_with).get(7) == todo
-    session_with.get.assert_called_once_with(TodoRecord, 7)
-
-
-def test_create_adds_commits_and_refreshes_before_returning_the_stored_task():
-    session = Mock(spec=Session)
-    session.refresh.side_effect = lambda record: setattr(record, "id", 11)
-    payload = TodoCreate(
-        title="Plan the sprint", description="Details", priority="high",
-        due_date=date(2026, 10, 15), completed=True,
+def stored(repository, clock):
+    clock.current = MONDAY
+    return repository.create(
+        TodoCreate(
+            title="Plan the sprint", description="Agenda", priority="high",
+            due_date=date(2026, 10, 15), completed=False,
+        )
     )
-    todo = TodoRepository(session).create(payload)
-    record = session.add.call_args.args[0]
-    assert call_names(session) == ["add", "commit", "refresh"]
-    session.refresh.assert_called_once_with(record)
-    assert todo.model_dump(exclude={"created_at", "updated_at"}) == {
-        "id": 11, "title": "Plan the sprint", "description": "Details",
-        "priority": "high", "due_date": date(2026, 10, 15), "completed": True,
+
+
+def as_utc(moment):
+    return moment.replace(tzinfo=timezone.utc)
+
+
+def fields(todo):
+    return todo.model_dump(exclude={"id", "created_at", "updated_at"})
+
+
+def test_create_returns_the_stored_values(stored):
+    assert fields(stored) == {
+        "title": "Plan the sprint", "description": "Agenda", "priority": "high",
+        "due_date": date(2026, 10, 15), "completed": False,
     }
 
 
-def test_create_stamps_equal_timezone_aware_creation_and_update_times():
-    session = Mock(spec=Session)
-    session.refresh.side_effect = lambda record: setattr(record, "id", 11)
-    before = datetime.now(timezone.utc)
-    todo = TodoRepository(session).create(TodoCreate(title="Task"))
-    after = datetime.now(timezone.utc)
-    assert todo.created_at == todo.updated_at
-    assert todo.created_at.tzinfo is not None
-    assert before <= todo.created_at <= after
+def test_created_task_can_be_read_back_by_id(stored, read_back):
+    assert read_back().get(stored.id) == stored
 
 
-def test_update_returns_none_and_commits_nothing_for_missing_task():
-    session = Mock(spec=Session)
-    session.get.return_value = None
-    assert TodoRepository(session).update(404, TodoUpdate(title="Renamed")) is None
-    session.get.assert_called_once_with(TodoRecord, 404)
-    session.commit.assert_not_called()
-    session.refresh.assert_not_called()
-
-
-def test_update_changes_only_the_fields_in_the_patch(session_with, stored_record, todo_values):
-    todo = TodoRepository(session_with).update(7, TodoUpdate(title="Renamed", completed=True))
-    session_with.get.assert_called_once_with(TodoRecord, 7)
-    assert todo.model_dump(exclude={"updated_at"}) == {
-        **{k: v for k, v in todo_values.items() if k != "updated_at"},
-        "title": "Renamed", "completed": True,
+def test_create_applies_defaults_for_omitted_fields(repository, read_back, clock):
+    clock.current = MONDAY
+    created = repository.create(TodoCreate(title="Task"))
+    assert fields(read_back().get(created.id)) == {
+        "title": "Task", "description": "", "priority": "medium",
+        "due_date": None, "completed": False,
     }
-    assert stored_record.title == "Renamed"
-    assert stored_record.description == "First scenario"
 
 
-def test_update_clears_the_due_date_when_patched_with_null(model_factory, todo_values):
-    record = model_factory({**todo_values, "due_date": date(2026, 10, 15)})
-    session = Mock(spec=Session)
-    session.get.return_value = record
-    todo = TodoRepository(session).update(7, TodoUpdate(due_date=None))
-    assert todo.due_date is None
-    assert record.due_date is None
+def test_create_assigns_distinct_ids(repository, clock):
+    clock.current = MONDAY
+    first = repository.create(TodoCreate(title="First"))
+    second = repository.create(TodoCreate(title="Second"))
+    assert first.id != second.id
 
 
-def test_update_moves_updated_at_forward_and_keeps_created_at(session_with, todo_values):
-    before = datetime.now(timezone.utc)
-    todo = TodoRepository(session_with).update(7, TodoUpdate(priority="low"))
-    assert todo.created_at == todo_values["created_at"]
-    assert todo.updated_at >= before
-    assert todo.updated_at.tzinfo is not None
+def test_create_stamps_creation_and_update_time_with_the_current_instant(stored, read_back):
+    found = read_back().get(stored.id)
+    assert (as_utc(found.created_at), as_utc(found.updated_at)) == (MONDAY, MONDAY)
 
 
-def test_update_commits_then_refreshes_the_record(session_with, stored_record):
-    TodoRepository(session_with).update(7, TodoUpdate(title="Renamed"))
-    assert call_names(session_with) == ["get", "commit", "refresh"]
-    session_with.refresh.assert_called_once_with(stored_record)
+def test_list_without_tasks_is_empty(repository):
+    assert repository.list() == []
 
 
-def test_delete_returns_false_and_deletes_nothing_for_missing_task():
-    session = Mock(spec=Session)
-    session.get.return_value = None
-    assert TodoRepository(session).delete(404) is False
-    session.get.assert_called_once_with(TodoRecord, 404)
-    session.delete.assert_not_called()
-    session.commit.assert_not_called()
+def test_list_orders_by_creation_time_newest_first_regardless_of_insertion_order(repository, read_back, clock):
+    clock.current = MONDAY
+    oldest = repository.create(TodoCreate(title="Created on Monday"))
+    clock.current = WEDNESDAY
+    newest = repository.create(TodoCreate(title="Created on Wednesday"))
+    clock.current = TUESDAY
+    middle = repository.create(TodoCreate(title="Created on Tuesday"))
+    assert [todo.id for todo in read_back().list()] == [newest.id, middle.id, oldest.id]
 
 
-def test_delete_removes_and_commits_an_existing_task(session_with, stored_record):
-    assert TodoRepository(session_with).delete(7) is True
-    assert call_names(session_with) == ["get", "delete", "commit"]
-    session_with.delete.assert_called_once_with(stored_record)
+def test_list_puts_the_higher_id_first_when_created_at_is_equal(repository, read_back, clock):
+    clock.current = MONDAY
+    first = repository.create(TodoCreate(title="First"))
+    second = repository.create(TodoCreate(title="Second"))
+    assert [todo.id for todo in read_back().list()] == [second.id, first.id]
+
+
+def test_get_unknown_id_returns_none(repository):
+    assert repository.get(404) is None
+
+
+def test_update_persists_only_the_patched_fields(stored, repository, read_back, clock):
+    clock.current = TUESDAY
+    repository.update(stored.id, TodoUpdate(title="Renamed", completed=True))
+    assert fields(read_back().get(stored.id)) == {
+        "title": "Renamed", "description": "Agenda", "priority": "high",
+        "due_date": date(2026, 10, 15), "completed": True,
+    }
+
+
+def test_update_returns_the_updated_task(stored, repository, read_back, clock):
+    clock.current = TUESDAY
+    updated = repository.update(stored.id, TodoUpdate(priority="low"))
+    assert updated == read_back().get(stored.id)
+
+
+def test_update_moves_updated_at_and_keeps_created_at(stored, repository, read_back, clock):
+    clock.current = TUESDAY
+    repository.update(stored.id, TodoUpdate(priority="low"))
+    found = read_back().get(stored.id)
+    assert (as_utc(found.created_at), as_utc(found.updated_at)) == (MONDAY, TUESDAY)
+
+
+def test_update_unknown_id_returns_none_and_stores_nothing(repository, read_back, clock):
+    clock.current = TUESDAY
+    assert repository.update(404, TodoUpdate(title="Renamed")) is None
+    assert read_back().list() == []
+
+
+def test_delete_removes_the_task(stored, repository, read_back):
+    assert repository.delete(stored.id) is True
+    assert read_back().get(stored.id) is None
+
+
+def test_delete_keeps_other_tasks(stored, repository, read_back, clock):
+    clock.current = TUESDAY
+    other = repository.create(TodoCreate(title="Keep me"))
+    repository.delete(stored.id)
+    assert [todo.id for todo in read_back().list()] == [other.id]
+
+
+def test_delete_unknown_id_returns_false_and_keeps_existing_tasks(stored, repository, read_back):
+    assert repository.delete(404) is False
+    assert read_back().list() == [stored]
