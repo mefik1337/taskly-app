@@ -64,6 +64,9 @@ claude -p "$prompt" \
 claude_status=$?
 set -e
 
+"$python_bin" test-agent/main.py redact --file "$out_dir/transcript.jsonl" \
+  --env ANTHROPIC_API_KEY --env CLAUDE_CODE_OAUTH_TOKEN --env ANTHROPIC_AUTH_TOKEN
+
 "$python_bin" test-agent/main.py transcript \
   --in "$out_dir/transcript.jsonl" \
   --report-out "$out_dir/agent-report.json" \

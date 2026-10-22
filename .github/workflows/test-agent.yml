@@ -124,9 +124,16 @@ jobs:
             --manifest .test-agent/manifest.json --coverage .test-agent/coverage-before.json --out .test-agent
       - name: Capture the agent's changes
         if: always()
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
           git add --intent-to-add --all
           git diff --no-color --binary > .test-agent/agent.patch
+          python3 test-agent/main.py redact --file .test-agent/agent.patch \
+            --env ANTHROPIC_API_KEY --env CLAUDE_CODE_OAUTH_TOKEN
+          python3 test-agent/main.py redact --file .test-agent/transcript.jsonl \
+            --env ANTHROPIC_API_KEY --env CLAUDE_CODE_OAUTH_TOKEN
           git apply --numstat .test-agent/agent.patch || true
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()

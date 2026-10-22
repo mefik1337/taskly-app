@@ -11,6 +11,7 @@ from .junit import summarize_junit
 from .manifest import build_manifest, snapshot_changes
 from .outcome import resolve_status
 from .paths import classify_path
+from .redact import redact
 from .report import render_comment
 from .transcript import summarize_transcript
 
@@ -116,6 +117,14 @@ def _transcript(args) -> int:
     return 0
 
 
+def _redact(args) -> int:
+    path = Path(args.file)
+    if path.is_file():
+        secrets = [os.environ.get(name) for name in args.env]
+        path.write_text(redact(path.read_text(encoding="utf-8"), secrets), encoding="utf-8")
+    return 0
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="pr_test_agent")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -143,6 +152,11 @@ def _parser() -> argparse.ArgumentParser:
     junit.add_argument("--report", action="append")
     junit.add_argument("--out", required=True)
     junit.set_defaults(handler=_junit)
+
+    redaction = commands.add_parser("redact")
+    redaction.add_argument("--file", required=True)
+    redaction.add_argument("--env", action="append", required=True)
+    redaction.set_defaults(handler=_redact)
 
     transcript = commands.add_parser("transcript")
     transcript.add_argument("--in", dest="input", required=True)

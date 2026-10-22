@@ -148,3 +148,11 @@ def test_junit_command_records_a_missing_report_as_a_failed_suite(tmp_path):
         "tests": 0, "passed": 0, "failures": 0, "errors": 1, "skipped": 0,
         "failed_cases": [{"name": "frontend", "message": "No test report was produced; the runner failed before running tests."}],
     }}
+
+
+def test_redact_command_scrubs_secrets_named_by_environment_variable(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "oauth-token-value-123")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    transcript = _write(tmp_path / "transcript.jsonl", '{"leak": "oauth-token-value-123"}\n')
+    assert main(["redact", "--file", transcript, "--env", "CLAUDE_CODE_OAUTH_TOKEN", "--env", "ANTHROPIC_API_KEY"]) == 0
+    assert (tmp_path / "transcript.jsonl").read_text(encoding="utf-8") == '{"leak": "[REDACTED]"}\n'
