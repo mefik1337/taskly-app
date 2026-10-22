@@ -100,3 +100,10 @@ def test_the_guard_command_passes_a_patch_of_test_files(repo, workspace):
     workspace.root.mkdir(parents=True)
     workspace.patch_path.write_text(agent_patch(repo, "backend/tests/test_new.py", "x = 1\n"), encoding="utf-8")
     assert run(["guard", "--stack", "backend", "--workspace", str(workspace.root)]) == 0
+
+
+def test_the_guard_command_checks_the_patch_it_is_given(repo, workspace):
+    workspace.root.mkdir(parents=True)
+    workspace.verified_patch_path.write_text(agent_patch(repo, "backend/app/router.py", "hacked\n"), encoding="utf-8")
+    argv = ["guard", "--stack", "backend", "--workspace", str(workspace.root), "--patch", str(workspace.verified_patch_path)]
+    assert run(argv) == 1

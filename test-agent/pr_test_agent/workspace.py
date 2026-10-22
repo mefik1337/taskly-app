@@ -19,6 +19,7 @@ class Workspace:
         self.root = Path(root)
         self.diff_path = self.root / "pr.diff"
         self.patch_path = self.root / "agent.patch"
+        self.verified_patch_path = self.root / "verified.patch"
         self.transcript_path = self.root / "transcript.jsonl"
         self.session_path = self.root / "session.txt"
         self.selfcheck_path = self.root / FILES[SuiteResult]

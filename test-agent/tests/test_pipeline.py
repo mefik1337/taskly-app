@@ -1,4 +1,5 @@
 from pr_test_agent.models import Analysis, FileCoverage, Verification
+from pr_test_agent.guard import touched_test_files
 from pr_test_agent.pipeline import analyze, script_runner, selfcheck, verify
 from pr_test_agent.stacks import get_stack
 from tests.support import FAILING, FakeRunner, agent_patch
@@ -87,3 +88,21 @@ def test_the_script_runner_runs_the_stack_runner_with_the_output_directory_and_t
     out_dir = tmp_path / "out"
     script_runner(repo)(BACKEND, out_dir, ["backend/tests/test_router.py"])
     assert (out_dir / "args.txt").read_text(encoding="utf-8") == "backend/tests/test_router.py "
+
+
+def test_verification_records_the_tested_files_as_they_were_after_the_runner_formatted_them(repo, pull_request, workspace):
+    class FormattingRunner(FakeRunner):
+        def __call__(self, stack, out_dir, test_files):
+            super().__call__(stack, out_dir, test_files)
+            for path in test_files:
+                test = self.repo / path
+                test.write_text(test.read_text(encoding="utf-8").replace("pass ", "pass"), encoding="utf-8")
+
+    runner = FormattingRunner(repo, hits={3: 1, 4: 1})
+    analyze(repo, BACKEND, workspace, base=pull_request, runner=runner)
+    workspace.patch_path.write_text(agent_patch(repo, "backend/tests/test_new.py", "def test_new():\n    pass \n"))
+    verify(repo, BACKEND, workspace, runner=runner)
+    verified = workspace.text(workspace.verified_patch_path)
+    assert "+    pass\n" in verified
+    assert "pass \n" not in verified
+    assert touched_test_files(verified) == ["backend/tests/test_new.py"]

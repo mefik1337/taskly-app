@@ -49,6 +49,13 @@ def _run_suite(
     return read_suite(name, out_dir / "junit.xml")
 
 
+def _tested_patch(repo: Path, patch_files: list[str]) -> str:
+    if not patch_files:
+        return ""
+    _git(repo, "add", "--intent-to-add", "--", *patch_files)
+    return _git(repo, "diff", "--no-color", "--binary", "--", *patch_files)
+
+
 def analyze(repo: Path, stack: Stack, workspace: Workspace, base: str | None, runner: Runner) -> Analysis:
     diff = _diff(repo, stack, base)
     workspace.root.mkdir(parents=True, exist_ok=True)
@@ -92,6 +99,7 @@ def verify(repo: Path, stack: Stack, workspace: Workspace, runner: Runner) -> Ve
             _run_suite(repo, stack, runner, workspace.run_dir(f"rerun-{attempt}"), f"agent tests, run {attempt}", patch_files)
             for attempt in (2, 3)
         ]
+    workspace.verified_patch_path.write_text(_tested_patch(repo, patch_files), encoding="utf-8")
     verification = Verification(violations=[], patch_files=patch_files, suites=suites, coverage=coverage)
     workspace.write(verification)
     return verification

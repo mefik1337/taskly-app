@@ -37,7 +37,7 @@ def _verify(args, repo: Path, runner_factory: RunnerFactory) -> int:
 
 def _guard(args, *_) -> int:
     workspace = Workspace(args.workspace)
-    violations = find_violations(get_stack(args.stack), workspace.text(workspace.patch_path))
+    violations = find_violations(get_stack(args.stack), workspace.text(Path(args.patch) if args.patch else workspace.patch_path))
     for violation in violations:
         print(violation, file=sys.stderr)
     return 1 if violations else 0
@@ -118,7 +118,7 @@ def _parser() -> argparse.ArgumentParser:
     source.add_argument("--all", dest="base", action="store_const", const=None)
     command("selfcheck", _selfcheck, stack=True, workspace=True)
     command("verify", _verify, stack=True, workspace=True)
-    command("guard", _guard, stack=True, workspace=True)
+    command("guard", _guard, stack=True, workspace=True).add_argument("--patch")
     command("status", _status, workspace=True)
     comment = command("comment", _comment, stack=True, workspace=True)
     comment.add_argument("--status", required=True)

@@ -172,7 +172,9 @@ jobs:
         if: always()
         with:
           name: test-agent-${{ inputs.stack }}-verification
-          path: ${{ env.WORKSPACE }}/verification.json
+          path: |
+            ${{ env.WORKSPACE }}/verification.json
+            ${{ env.WORKSPACE }}/verified.patch
           if-no-files-found: ignore
           retention-days: 14
 
@@ -211,8 +213,8 @@ jobs:
         id: commit
         if: steps.outcome.outputs.status == 'verified' && env.AUTO_COMMIT == 'true'
         run: |
-          "$TEST_AGENT_PYTHON" test-agent/main.py guard --stack "$STACK" --workspace "$WORKSPACE"
-          git apply --whitespace=nowarn "$WORKSPACE/agent.patch"
+          "$TEST_AGENT_PYTHON" test-agent/main.py guard --stack "$STACK" --workspace "$WORKSPACE"             --patch "$WORKSPACE/verified.patch"
+          git apply --whitespace=nowarn "$WORKSPACE/verified.patch"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add --all -- "$STACK"
@@ -262,7 +264,7 @@ jobs:
         if: steps.outcome.outputs.status == 'verified' && steps.commit.outputs.sha == ''
         with:
           name: test-agent-${{ inputs.stack }}-patch
-          path: ${{ env.WORKSPACE }}/agent.patch
+          path: ${{ env.WORKSPACE }}/verified.patch
           retention-days: 14
       - name: Fail on rejected or failing tests
         if: steps.outcome.outputs.status == 'rejected' || steps.outcome.outputs.status == 'verification_failed'
