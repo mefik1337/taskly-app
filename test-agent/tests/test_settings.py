@@ -1,3 +1,6 @@
+import pytest
+from pathspec import GitIgnoreSpec
+
 from pr_test_agent.settings import claude_settings
 from pr_test_agent.stacks import get_stack
 
@@ -31,9 +34,9 @@ def test_the_agent_may_run_only_the_test_runner_of_its_stack_and_read_only_git()
     ]
 
 
-def test_production_code_of_the_stack_and_the_whole_other_stack_are_denied():
+def test_the_other_stack_ci_and_agent_files_are_denied():
     deny = _permissions("backend")["deny"]
-    for rule in ("Edit(backend/app/**)", "Write(backend/app/**)", "Edit(frontend/**)", "Write(frontend/**)"):
+    for rule in ("Edit(frontend/**)", "Write(frontend/**)", "Edit(.github/**)", "Write(test-agent/**)"):
         assert rule in deny
 
 
@@ -42,3 +45,19 @@ def test_secrets_and_the_network_are_denied_and_unlisted_tools_are_refused():
     for rule in ("WebFetch", "WebSearch", "Read(**/.env)", "Bash(printenv)", "Bash(env *)", "Read(//proc/**)"):
         assert rule in permissions["deny"]
     assert permissions["defaultMode"] == "dontAsk"
+
+
+@pytest.mark.parametrize(
+    ("stack", "path"),
+    [
+        ("backend", "backend/tests/features/todos/test_router.py"),
+        ("backend", "backend/tests/conftest.py"),
+        ("frontend", "frontend/src/features/todos/components/TodosHeader.test.tsx"),
+        ("frontend", "frontend/src/lib/http.test.ts"),
+        ("frontend", "frontend/src/test/fakeApi.ts"),
+    ],
+)
+def test_no_deny_rule_shadows_a_test_file_the_stack_owns(stack, path):
+    denied = [rule[len(tool) + 1:-1] for rule in _permissions(stack)["deny"] for tool in ("Edit", "Write")
+              if rule.startswith(f"{tool}(")]
+    assert not GitIgnoreSpec.from_lines(denied).match_file(path)

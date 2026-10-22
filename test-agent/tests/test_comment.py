@@ -164,3 +164,10 @@ def test_uncovered_lines_are_collapsed_into_ranges():
     after = [FileCoverage(path=ROUTER, covered_lines=[1, 9], uncovered_lines=[2, 3, 4, 5, 7, 10, 11])]
     comment = render_comment(context(verification=verification(coverage=after), analysis=analysis(targets=[])))
     assert f"| `{ROUTER}` | n/a | 22.2% | 2–5, 7, 10–11 |" in comment
+
+
+def test_a_run_without_changes_points_to_the_decisions_instead_of_claiming_nothing_was_needed():
+    comment = render_comment(context(status="no_changes", commit_sha=None,
+                                     verification=verification(patch_files=[], coverage=None)))
+    assert "ℹ️ The agent changed no files. Its decisions below give the reason for each one." in comment
+    assert "no new tests are needed" not in comment

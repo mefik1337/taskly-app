@@ -25,7 +25,7 @@ HEADLINES = {
         "Fix the build so the suite runs, then push again."
     ),
     "agent_failed": "⚠️ The agent did not finish with a valid report, so nothing was committed.",
-    "no_changes": "✅ The agent reviewed the changes and decided that no new tests are needed.",
+    "no_changes": "ℹ️ The agent changed no files. Its decisions below give the reason for each one.",
     "verified_not_committed": (
         "☑️ Tests were generated and verified but not committed. "
         "Download the `test-agent-{stack}-patch` artifact and apply it with `git apply`."

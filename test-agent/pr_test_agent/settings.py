@@ -37,7 +37,7 @@ def claude_settings(stack: Stack) -> dict:
             ],
             "deny": [
                 *ALWAYS_DENIED,
-                *_edit_and_write([f"{stack.production_root}/**", *other_roots, *PROTECTED_ROOTS]),
+                *_edit_and_write([*other_roots, *PROTECTED_ROOTS]),
             ],
         },
         "env": {"DISABLE_AUTOUPDATER": "1", "DISABLE_TELEMETRY": "1", "DISABLE_ERROR_REPORTING": "1"},
