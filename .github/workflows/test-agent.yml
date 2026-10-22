@@ -87,6 +87,10 @@ jobs:
     environment: test-agent
     permissions:
       contents: read
+    env:
+      TEST_AGENT_MODEL: ${{ vars.TEST_AGENT_MODEL || 'claude-sonnet-5-5' }}
+      TEST_AGENT_MAX_TURNS: ${{ vars.TEST_AGENT_MAX_TURNS || '80' }}
+      TEST_AGENT_MAX_BUDGET_USD: ${{ vars.TEST_AGENT_MAX_BUDGET_USD || '5' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -110,9 +114,6 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          TEST_AGENT_MODEL: ${{ vars.TEST_AGENT_MODEL || 'claude-sonnet-5-5' }}
-          TEST_AGENT_MAX_TURNS: ${{ vars.TEST_AGENT_MAX_TURNS || '80' }}
-          TEST_AGENT_MAX_BUDGET_USD: ${{ vars.TEST_AGENT_MAX_BUDGET_USD || '5' }}
         run: |
           [[ -n "$ANTHROPIC_API_KEY" ]] || unset ANTHROPIC_API_KEY
           [[ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]] || unset CLAUDE_CODE_OAUTH_TOKEN
@@ -122,6 +123,39 @@ jobs:
           fi
           test-agent/bin/run-agent --mode pr --base "$BASE_SHA" \
             --manifest .test-agent/manifest.json --coverage .test-agent/coverage-before.json --out .test-agent
+      - name: Check the full suites after the agent
+        id: selfcheck
+        env:
+          RUN_BACKEND: ${{ needs.analyze.outputs.backend }}
+          RUN_FRONTEND: ${{ needs.analyze.outputs.frontend }}
+        run: |
+          if [[ ! -f .test-agent/agent-report.json ]]; then
+            echo "failed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          reports=()
+          for area in backend frontend; do
+            enabled="RUN_${area^^}"
+            [[ "${!enabled}" == "true" ]] || continue
+            TEST_AGENT_OUT=.test-agent/selfcheck "test-agent/bin/run-$area-tests" || true
+            reports+=(--report "$area=.test-agent/selfcheck/$area-junit.xml")
+          done
+          python3 test-agent/main.py junit "${reports[@]}" --out .test-agent/selfcheck/suites.json
+          if python3 test-agent/main.py check-suites --suites .test-agent/selfcheck/suites.json; then
+            echo "failed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "failed=true" >> "$GITHUB_OUTPUT"
+            jq -c '[.[] | .failed_cases[]]' .test-agent/selfcheck/suites.json
+          fi
+      - name: Repair failing tests in the same agent session
+        if: steps.selfcheck.outputs.failed == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          [[ -n "$ANTHROPIC_API_KEY" ]] || unset ANTHROPIC_API_KEY
+          [[ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]] || unset CLAUDE_CODE_OAUTH_TOKEN
+          test-agent/bin/run-agent --mode repair --failures .test-agent/selfcheck/suites.json --out .test-agent
       - name: Capture the agent's changes
         if: always()
         env:

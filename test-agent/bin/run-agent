@@ -3,50 +3,72 @@ set -euo pipefail
 
 usage() {
   echo "usage: run-agent --mode pr|backfill --manifest FILE --coverage FILE [--base SHA] [--out DIR]" >&2
+  echo "       run-agent --mode repair --failures FILE [--out DIR]" >&2
   exit 2
 }
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-mode="" manifest="" coverage="" base="" out_dir=".test-agent"
+mode="" manifest="" coverage="" base="" failures="" out_dir=".test-agent"
 while (( $# )); do
   case "$1" in
     --mode) mode="${2:-}"; shift 2 ;;
     --manifest) manifest="${2:-}"; shift 2 ;;
     --coverage) coverage="${2:-}"; shift 2 ;;
     --base) base="${2:-}"; shift 2 ;;
+    --failures) failures="${2:-}"; shift 2 ;;
     --out) out_dir="${2:-}"; shift 2 ;;
     *) usage ;;
   esac
 done
 
-[[ "$mode" == "pr" || "$mode" == "backfill" ]] || usage
-[[ "$mode" == "backfill" || "$base" =~ ^[0-9a-f]{40}$ ]] || { echo "run-agent: --base must be a full commit SHA in pr mode" >&2; exit 2; }
-for input in "$manifest" "$coverage"; do
-  [[ "$input" =~ ^[A-Za-z0-9._/-]+$ && "$input" != /* && "$input" != *..* && -f "$repo_root/$input" ]] \
-    || { echo "run-agent: inputs must be existing repository-relative files: $input" >&2; exit 2; }
-done
+require_input() {
+  [[ "$1" =~ ^[A-Za-z0-9._/-]+$ && "$1" != /* && "$1" != *..* && -f "$repo_root/$1" ]] \
+    || { echo "run-agent: inputs must be existing repository-relative files: $1" >&2; exit 2; }
+}
+
+cd "$repo_root"
+mkdir -p "$out_dir"
+
+case "$mode" in
+  pr | backfill)
+    [[ "$mode" == "backfill" || "$base" =~ ^[0-9a-f]{40}$ ]] || { echo "run-agent: --base must be a full commit SHA in pr mode" >&2; exit 2; }
+    require_input "$manifest"
+    require_input "$coverage"
+    if [[ "$mode" == "pr" ]]; then
+      base_line="Base commit: $base"
+    else
+      base_line="Base commit: none. Backfill mode: every line of every target counts as changed."
+    fi
+    prompt="Mode: $mode
+Manifest: $manifest
+Coverage before your work: $coverage
+$base_line
+
+Work through your workflow and finish with the report."
+    session_args=()
+    : > "$out_dir/transcript.jsonl"
+    ;;
+  repair)
+    require_input "$failures"
+    session="$(cat "$out_dir/session.txt" 2>/dev/null || true)"
+    [[ "$session" =~ ^[0-9a-f-]{36}$ ]] || { echo "run-agent: no previous session to repair" >&2; exit 2; }
+    prompt="Mode: repair
+Failing suites: $failures
+
+The full test suites fail after your changes. Open that file, fix every failing test with the test-verification skill, run the full suite of every stack you touched until it is green, then return the report for the whole run."
+    session_args=(--resume "$session")
+    ;;
+  *) usage ;;
+esac
 
 model="${TEST_AGENT_MODEL:-claude-sonnet-5-5}"
 max_turns="${TEST_AGENT_MAX_TURNS:-80}"
 max_budget="${TEST_AGENT_MAX_BUDGET_USD:-5}"
 python_bin="${PYTHON:-python3}"
 
-if [[ "$mode" == "pr" ]]; then
-  base_line="Base commit: $base"
-else
-  base_line="Base commit: none. Backfill mode: every line of every target counts as changed."
-fi
-prompt="Mode: $mode
-Manifest: $manifest
-Coverage before your work: $coverage
-$base_line
-
-Work through your workflow and finish with the report."
-
-cd "$repo_root"
-mkdir -p "$out_dir"
 set +e
 claude -p "$prompt" \
+  "${session_args[@]}" \
   --agent test-engineer \
   --model "$model" \
   --setting-sources project \
@@ -59,17 +81,17 @@ claude -p "$prompt" \
   --max-budget-usd "$max_budget" \
   --json-schema "$(cat test-agent/report.schema.json)" \
   --output-format stream-json --verbose \
-  --no-session-persistence \
-  < /dev/null > "$out_dir/transcript.jsonl"
+  < /dev/null >> "$out_dir/transcript.jsonl"
 claude_status=$?
 set -e
 
 "$python_bin" test-agent/main.py redact --file "$out_dir/transcript.jsonl" \
   --env ANTHROPIC_API_KEY --env CLAUDE_CODE_OAUTH_TOKEN --env ANTHROPIC_AUTH_TOKEN
-
+rm -f "$out_dir/agent-report.json"
 "$python_bin" test-agent/main.py transcript \
   --in "$out_dir/transcript.jsonl" \
   --report-out "$out_dir/agent-report.json" \
-  --run-out "$out_dir/agent-run.json"
+  --run-out "$out_dir/agent-run.json" \
+  --session-out "$out_dir/session.txt"
 echo "run-agent: claude exited with $claude_status"
 cat "$out_dir/agent-run.json"
