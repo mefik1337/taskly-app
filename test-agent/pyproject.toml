@@ -1,3 +1,29 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "taskly-test-agent"
+version = "2.0.0"
+requires-python = ">=3.12"
+dependencies = [
+    "diff-cover==10.6.0",
+    "jinja2==3.1.6",
+    "junitparser==5.0.3",
+    "pathspec==1.1.1",
+    "pydantic==2.14.1",
+    "unidiff==1.0.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.1.1",
+    "pytest-cov==7.1.0",
+]
+
+[tool.setuptools]
+packages = ["pr_test_agent"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
