@@ -6,6 +6,7 @@ import { todoFixture } from '../../../test/todoFixture'
 import { todoKeys } from '../api/queryKeys'
 import type { Todo } from '../types'
 import { useClearCompletedMutation } from './useClearCompletedMutation'
+import { useTodosQuery } from './useTodosQuery'
 
 const active: Todo = { ...todoFixture, id: 3, title: 'Other' }
 const done: Todo = { ...todoFixture, id: 4, title: 'Done', completed: true }
@@ -47,4 +48,19 @@ it('keeps the cached list and exposes the server message on failure', async () =
     expect(result.current.error?.message).toBe('Could not clear tasks.'),
   )
   expect(cachedList()).toEqual([active, done])
+})
+
+it('keeps cleared tasks gone when an older list request finishes afterwards', async () => {
+  const api = installFakeApi([active, done])
+  const { result } = renderHook(
+    () => ({ list: useTodosQuery(), clear: useClearCompletedMutation() }),
+    { wrapper: queryWrapper(createTestQueryClient()) },
+  )
+  await waitFor(() => expect(result.current.list.data).toEqual([active, done]))
+  const release = api.delayNextResponse('GET')
+  act(() => void result.current.list.refetch())
+  await waitFor(() => expect(api.requestsTo('GET')).toHaveLength(2))
+  await act(() => result.current.clear.mutateAsync())
+  await act(async () => release())
+  expect(result.current.list.data).toEqual([active])
 })
