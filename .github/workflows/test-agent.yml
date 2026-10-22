@@ -1,0 +1,309 @@
+name: Test agent
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "backend/**"
+      - "frontend/**"
+
+permissions: {}
+
+concurrency:
+  group: test-agent-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  CLAUDE_CODE_VERSION: "2.1.308"
+  BASE_SHA: ${{ github.event.pull_request.base.sha }}
+  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+
+jobs:
+  analyze:
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'github-actions[bot]' &&
+      !contains(github.event.pull_request.labels.*.name, 'skip-test-agent')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      has_targets: ${{ steps.manifest.outputs.has_targets }}
+      backend: ${{ steps.manifest.outputs.backend }}
+      frontend: ${{ steps.manifest.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Build the change manifest
+        id: manifest
+        run: |
+          mkdir -p .test-agent
+          git diff --no-color --unified=0 --find-renames "$BASE_SHA...$HEAD_SHA" > .test-agent/pr.diff
+          python3 test-agent/main.py manifest --diff .test-agent/pr.diff --out .test-agent/manifest.json
+          {
+            echo "has_targets=$(jq '.targets | length > 0' .test-agent/manifest.json)"
+            echo "backend=$(jq '.areas | index("backend") != null' .test-agent/manifest.json)"
+            echo "frontend=$(jq '.areas | index("frontend") != null' .test-agent/manifest.json)"
+          } >> "$GITHUB_OUTPUT"
+          jq '{targets, areas}' .test-agent/manifest.json
+      - if: steps.manifest.outputs.has_targets == 'true'
+        uses: ./.github/actions/setup-stacks
+        with:
+          backend: ${{ steps.manifest.outputs.backend }}
+          frontend: ${{ steps.manifest.outputs.frontend }}
+      - name: Measure changed-line coverage before the agent
+        if: steps.manifest.outputs.has_targets == 'true'
+        env:
+          RUN_BACKEND: ${{ steps.manifest.outputs.backend }}
+          RUN_FRONTEND: ${{ steps.manifest.outputs.frontend }}
+          TEST_AGENT_OUT: ${{ github.workspace }}/.test-agent/before
+        run: |
+          if [[ "$RUN_BACKEND" == "true" ]]; then test-agent/bin/run-backend-tests || true; fi
+          if [[ "$RUN_FRONTEND" == "true" ]]; then test-agent/bin/run-frontend-tests || true; fi
+          python3 test-agent/main.py diff-coverage --manifest .test-agent/manifest.json \
+            --lcov backend=backend/coverage/lcov.info --lcov frontend=frontend/coverage/lcov.info \
+            --out .test-agent/coverage-before.json
+          jq .total .test-agent/coverage-before.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-agent-analysis
+          path: |
+            .test-agent/pr.diff
+            .test-agent/manifest.json
+            .test-agent/coverage-before.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+  generate:
+    needs: analyze
+    if: needs.analyze.outputs.has_targets == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: test-agent
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: test-agent-analysis
+          path: .test-agent
+      - uses: ./.github/actions/setup-stacks
+        with:
+          backend: ${{ needs.analyze.outputs.backend }}
+          frontend: ${{ needs.analyze.outputs.frontend }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+      - name: Install Claude Code
+        run: npm install --global --no-audit --no-fund "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+      - name: Run the test-engineer agent
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          TEST_AGENT_MODEL: ${{ vars.TEST_AGENT_MODEL || 'claude-sonnet-5-5' }}
+          TEST_AGENT_MAX_TURNS: ${{ vars.TEST_AGENT_MAX_TURNS || '80' }}
+          TEST_AGENT_MAX_BUDGET_USD: ${{ vars.TEST_AGENT_MAX_BUDGET_USD || '5' }}
+        run: |
+          [[ -n "$ANTHROPIC_API_KEY" ]] || unset ANTHROPIC_API_KEY
+          [[ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]] || unset CLAUDE_CODE_OAUTH_TOKEN
+          if [[ -z "${ANTHROPIC_API_KEY:-}${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
+            echo "::error::Set the ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN secret in the test-agent environment."
+            exit 1
+          fi
+          test-agent/bin/run-agent --mode pr --base "$BASE_SHA" \
+            --manifest .test-agent/manifest.json --coverage .test-agent/coverage-before.json --out .test-agent
+      - name: Capture the agent's changes
+        if: always()
+        run: |
+          git add --intent-to-add --all
+          git diff --no-color --binary > .test-agent/agent.patch
+          git apply --numstat .test-agent/agent.patch || true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: test-agent-output
+          path: |
+            .test-agent/agent.patch
+            .test-agent/agent-report.json
+            .test-agent/agent-run.json
+            .test-agent/transcript.jsonl
+          if-no-files-found: ignore
+          retention-days: 14
+
+  verify:
+    needs: [analyze, generate]
+    if: ${{ !cancelled() && needs.generate.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: test-agent-analysis
+          path: .test-agent
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: test-agent-output
+          path: .test-agent
+      - name: Guard and apply the agent's patch
+        id: patch
+        env:
+          PR_BACKEND: ${{ needs.analyze.outputs.backend }}
+          PR_FRONTEND: ${{ needs.analyze.outputs.frontend }}
+        run: |
+          touch .test-agent/agent.patch
+          if python3 test-agent/main.py guard --diff .test-agent/agent.patch --out .test-agent/violations.json; then
+            if [[ -s .test-agent/agent.patch ]]; then git apply --whitespace=nowarn .test-agent/agent.patch; fi
+            echo "accepted=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "accepted=false" >> "$GITHUB_OUTPUT"
+          fi
+          git apply --numstat .test-agent/agent.patch 2>/dev/null | cut -f3 > .test-agent/agent-files.txt || true
+          for area in backend frontend; do
+            pr_flag="PR_${area^^}"
+            if [[ "${!pr_flag}" == "true" ]] || grep -q "^$area/" .test-agent/agent-files.txt; then
+              echo "$area=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "$area=false" >> "$GITHUB_OUTPUT"
+            fi
+          done
+      - uses: ./.github/actions/setup-stacks
+        if: steps.patch.outputs.accepted == 'true'
+        with:
+          backend: ${{ steps.patch.outputs.backend }}
+          frontend: ${{ steps.patch.outputs.frontend }}
+      - name: Run the suites and re-run the agent's tests
+        if: steps.patch.outputs.accepted == 'true'
+        env:
+          RUN_BACKEND: ${{ steps.patch.outputs.backend }}
+          RUN_FRONTEND: ${{ steps.patch.outputs.frontend }}
+        run: |
+          reports=()
+          for area in backend frontend; do
+            enabled="RUN_${area^^}"
+            [[ "${!enabled}" == "true" ]] || continue
+            TEST_AGENT_OUT=.test-agent/verify "test-agent/bin/run-$area-tests" || true
+            cp "$area/coverage/lcov.info" ".test-agent/verify/$area.lcov" || true
+            reports+=(--report "$area=.test-agent/verify/$area-junit.xml")
+            mapfile -t touched < <(grep -E "^$area/" .test-agent/agent-files.txt || true)
+            if (( ${#touched[@]} )); then
+              for attempt in 2 3; do
+                TEST_AGENT_OUT=".test-agent/rerun-$attempt" "test-agent/bin/run-$area-tests" "${touched[@]}" || true
+                reports+=(--report "$area agent tests, run $attempt=.test-agent/rerun-$attempt/$area-junit.xml")
+              done
+            fi
+          done
+          python3 test-agent/main.py junit "${reports[@]}" --out .test-agent/suites.json
+          python3 test-agent/main.py diff-coverage --manifest .test-agent/manifest.json \
+            --lcov backend=.test-agent/verify/backend.lcov --lcov frontend=.test-agent/verify/frontend.lcov \
+            --out .test-agent/coverage-after.json
+          jq . .test-agent/suites.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: test-agent-verification
+          path: |
+            .test-agent/violations.json
+            .test-agent/suites.json
+            .test-agent/coverage-after.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+  publish:
+    needs: [analyze, generate, verify]
+    if: ${{ !cancelled() && needs.analyze.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      HEAD_REF: ${{ github.event.pull_request.head.ref }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      AUTO_COMMIT: ${{ vars.TEST_AGENT_AUTO_COMMIT || 'true' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.HEAD_SHA }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: test-agent-*
+          merge-multiple: true
+          path: .test-agent
+      - name: Resolve the outcome
+        id: outcome
+        run: |
+          status=$(python3 test-agent/main.py status --manifest .test-agent/manifest.json \
+            --agent-report .test-agent/agent-report.json --violations .test-agent/violations.json \
+            --suites .test-agent/suites.json --patch .test-agent/agent.patch)
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "Outcome: $status"
+      - name: Commit the verified tests to the pull request branch
+        id: commit
+        if: steps.outcome.outputs.status == 'verified' && env.AUTO_COMMIT == 'true'
+        run: |
+          python3 test-agent/main.py guard --diff .test-agent/agent.patch --out .test-agent/violations-publish.json
+          git apply --whitespace=nowarn .test-agent/agent.patch
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add --all -- backend/tests frontend/src
+          git commit --quiet --message "test: add unit tests for changes in #${PR_NUMBER}"
+          if git push origin "HEAD:refs/heads/${HEAD_REF}"; then
+            echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::The branch moved since the agent ran; the verified patch is attached as an artifact instead."
+          fi
+      - name: Render the report
+        env:
+          STATUS: ${{ steps.outcome.outputs.status }}
+          COMMIT_SHA: ${{ steps.commit.outputs.sha }}
+        run: |
+          final="$STATUS"
+          if [[ "$STATUS" == "verified" ]]; then
+            if [[ -n "$COMMIT_SHA" ]]; then final=committed; else final=verified_not_committed; fi
+          fi
+          python3 test-agent/main.py render --status "$final" --manifest .test-agent/manifest.json \
+            --agent-report .test-agent/agent-report.json --agent-run .test-agent/agent-run.json \
+            --violations .test-agent/violations.json --suites .test-agent/suites.json \
+            --coverage-before .test-agent/coverage-before.json --coverage-after .test-agent/coverage-after.json \
+            --commit-sha "$COMMIT_SHA" --run-url "$RUN_URL" --out .test-agent/comment.md
+          cat .test-agent/comment.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish the sticky pull request comment
+        run: |
+          comment_id=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- taskly-test-agent -->"))) | .id' | head -n 1)
+          if [[ -n "$comment_id" ]]; then
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" -F body=@.test-agent/comment.md > /dev/null
+          else
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" -F body=@.test-agent/comment.md > /dev/null
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.outcome.outputs.status == 'verified' && steps.commit.outputs.sha == ''
+        with:
+          name: test-agent-patch
+          path: .test-agent/agent.patch
+          retention-days: 14
+      - name: Fail on rejected or failing tests
+        if: steps.outcome.outputs.status == 'rejected' || steps.outcome.outputs.status == 'verification_failed'
+        env:
+          STATUS: ${{ steps.outcome.outputs.status }}
+        run: |
+          echo "::error::Test agent outcome: $STATUS. See the pull request comment for details."
+          exit 1
