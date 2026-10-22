@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Session
 
-from app.features.todos.models import TodoRecord
+from app.features.todos.models import Base, TodoRecord
 from app.features.todos.repository import TodoRepository
 from app.features.todos.schemas import TodoCreate, TodoUpdate
 
@@ -140,3 +140,22 @@ def test_delete_removes_and_commits_an_existing_task(session_with, stored_record
     assert TodoRepository(session_with).delete(7) is True
     assert call_names(session_with) == ["get", "delete", "commit"]
     session_with.delete.assert_called_once_with(stored_record)
+
+
+def test_delete_completed_removes_only_completed_tasks_and_reports_how_many(sqlite_engine):
+    Base.metadata.create_all(sqlite_engine)
+    with Session(sqlite_engine) as session:
+        repository = TodoRepository(session)
+        for title, completed in [("Done", True), ("Open", False), ("Also done", True)]:
+            repository.create(TodoCreate(title=title, completed=completed))
+        assert repository.delete_completed() == 2
+        assert [todo.title for todo in repository.list()] == ["Open"]
+
+
+def test_delete_completed_reports_zero_and_keeps_tasks_when_nothing_is_completed(sqlite_engine):
+    Base.metadata.create_all(sqlite_engine)
+    with Session(sqlite_engine) as session:
+        repository = TodoRepository(session)
+        repository.create(TodoCreate(title="Open"))
+        assert repository.delete_completed() == 0
+        assert [todo.title for todo in repository.list()] == ["Open"]
