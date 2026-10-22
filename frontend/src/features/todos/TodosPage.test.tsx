@@ -253,3 +253,56 @@ it('keeps the task when deletion is cancelled', async () => {
   expect(screen.queryByRole('status')).not.toBeInTheDocument()
   expect(api.requestsTo('DELETE')).toEqual([])
 })
+
+it('clears completed tasks and reports how many were removed', async () => {
+  installFakeApi([todoFixture, groceries])
+  const { user } = renderPage()
+  await user.click(
+    await screen.findByRole('button', { name: 'Clear completed (1)' }),
+  )
+  expect(await screen.findByRole('status')).toHaveTextContent(
+    'Removed 1 completed task.',
+  )
+  expect(taskTitles()).toEqual(['Prepare a demo'])
+  expect(
+    screen.queryByRole('button', { name: /Clear completed/ }),
+  ).not.toBeInTheDocument()
+})
+
+it('shows the server error when clearing completed tasks fails and dismisses it on Try again', async () => {
+  const api = installFakeApi([groceries])
+  const { user } = renderPage()
+  const clear = await screen.findByRole('button', {
+    name: 'Clear completed (1)',
+  })
+  api.failNext('DELETE', 500, 'Could not clear tasks.')
+  await user.click(clear)
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    'Could not clear tasks.',
+  )
+  expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  await user.click(screen.getByRole('button', { name: 'Try again' }))
+  await waitFor(() =>
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument(),
+  )
+})
+
+it('keeps the page locked while completed tasks are being cleared', async () => {
+  const api = installFakeApi([todoFixture, groceries])
+  const release = api.delayNextResponse('DELETE')
+  const { user } = renderPage()
+  await user.click(
+    await screen.findByRole('button', { name: 'Clear completed (1)' }),
+  )
+  await waitFor(() =>
+    expect(
+      screen.getByRole('button', { name: 'Clear completed (1)' }),
+    ).toBeDisabled(),
+  )
+  expect(screen.getByRole('button', { name: 'New task' })).toBeDisabled()
+  release()
+  expect(await screen.findByRole('status')).toHaveTextContent(
+    'Removed 1 completed task.',
+  )
+  expect(screen.getByRole('button', { name: 'New task' })).toBeEnabled()
+})

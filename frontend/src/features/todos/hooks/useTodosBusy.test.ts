@@ -3,6 +3,7 @@ import { expect, it } from 'vitest'
 import { installFakeApi, type Method } from '../../../test/fakeApi'
 import { createTestQueryClient, queryWrapper } from '../../../test/queryWrapper'
 import { todoFixture } from '../../../test/todoFixture'
+import { useClearCompletedMutation } from './useClearCompletedMutation'
 import { useCreateTodoMutation } from './useCreateTodoMutation'
 import { useDeleteTodoMutation } from './useDeleteTodoMutation'
 import { useTodosBusy } from './useTodosBusy'
@@ -16,6 +17,7 @@ function renderBusy() {
       create: useCreateTodoMutation(),
       update: useUpdateTodoMutation(),
       remove: useDeleteTodoMutation(),
+      clear: useClearCompletedMutation(),
     }),
     { wrapper: queryWrapper(createTestQueryClient()) },
   ).result
@@ -36,6 +38,7 @@ it.each<[string, Method, (hooks: Hooks) => void]>([
     (hooks) => hooks.update.mutate({ id: 7, input: { completed: true } }),
   ],
   ['deleted', 'DELETE', (hooks) => hooks.remove.mutate(7)],
+  ['cleared', 'DELETE', (hooks) => hooks.clear.mutate()],
 ])(
   'is busy while a task is being %s and idle once the server answers',
   async (_, method, start) => {

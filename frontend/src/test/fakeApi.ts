@@ -44,6 +44,11 @@ export function installFakeApi(
   }
 
   function route(method: Method, url: string, body: unknown): Response {
+    if (method === 'DELETE' && url === '/api/todos/completed') {
+      const deleted = todos.filter((todo) => todo.completed).length
+      todos = todos.filter((todo) => !todo.completed)
+      return json({ deleted })
+    }
     const match = /^\/api\/todos(?:\/(\d+))?$/.exec(url)
     if (!match) return json({ detail: 'Not Found' }, 404)
     const now = new Date().toISOString()
